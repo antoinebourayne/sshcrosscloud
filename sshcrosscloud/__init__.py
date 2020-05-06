@@ -1,5 +1,6 @@
 import getpass
 import getpass as gt
+import platform
 import subprocess
 import time
 import logging
@@ -21,31 +22,32 @@ SSH-EC2 Python Version
 """
 
 aws_default_dict = {
-        'FINAL_STATE': 'leave',
-        'REGION': "eu-central-1",
-        'INSTANCE_TYPE': "t2.micro",
-        'USER_DATA': "",
-        'SECURITY_GROUP': "homeANBO",
-        'IMAGE_ID': "ami-0e342d72b12109f91",
-        'IMAGE_NAME': "ubuntu"
+    'FINAL_STATE': 'leave',
+    'REGION': "eu-central-1",
+    'INSTANCE_TYPE': "t2.micro",
+    'USER_DATA': "",
+    'SECURITY_GROUP': "homeANBO",
+    'IMAGE_ID': "ami-0e342d72b12109f91",
+    'IMAGE_NAME': "ubuntu"
 }
 
 azure_default_dict = {
-        'FINAL_STATE': 'leave',
-        'REGION': "us-central1-a",
-        'INSTANCE_TYPE': "f1-micro",
-        'IMAGE_NAME': "ubuntu",
-        'USER_DATA': "",
-        'IMAGE_ID': "UbuntuServer:16.04",
-    }
+    'FINAL_STATE': 'leave',
+    'REGION': "us-central1-a",
+    'INSTANCE_TYPE': "f1-micro",
+    'IMAGE_NAME': "ubuntu",
+    'USER_DATA': "",
+    'IMAGE_ID': "UbuntuServer:16.04",
+}
 
 gcp_default_dict = {
-        'FINAL_STATE': 'leave',
-        'REGION': "us-central1-a",
-        'INSTANCE_TYPE': "f1-micro",
-        'IMAGE_NAME': "ubuntu",
-        'USER_DATA': "",
-    }
+    'FINAL_STATE': 'leave',
+    'REGION': "us-central1-a",
+    'INSTANCE_TYPE': "f1-micro",
+    'IMAGE_NAME': "ubuntu",
+    'USER_DATA': "",
+}
+
 
 # TODO: remplir les "help"
 @click.command()
@@ -111,6 +113,7 @@ def main(leave, stop, terminate, detach, attach, finish, verbose, help, status, 
         arg_provider(provider)
     else:
         logging.warning("You must specify a provider")
+        sys.exit(1)
 
     if l is not None:
         arg_L(l)
@@ -457,7 +460,6 @@ def init_variables(ssh: SSHCrossCloud):
         if ssh.env['DEBUG'] == "y":
             ssh.env["FINAL_STATE"] = "leave"
 
-
     ssh.env['OS_NAME'] = get_os_name()
     ssh.env['USER_DATA'] = get_string_from_file(".user_data")
     ssh.env['INSTANCE_USER'] = ssh.get_instance_user()
@@ -480,34 +482,34 @@ def guide_credentials(provider: str):
     if provider == 'AWS':
         guide = """
         To configure AWS credentials, you must follow the instructions below:
-        
+
         1. You  need to create an AWS account, then IAM console -> Users -> User Actions -> Manage Access Keys -> Create Access Key
         Store this pair of keys in 'HOME/.aws/credentials' as follows:
-        
+
         [default]
         aws_access_key_id = XXXXXXXXXXXXXXXXXXX
         aws_secret_access_key = XXXXXXXXXXXXXXXXXXX
-        
+
         2. Execute the following script in a shell (the POLYGRAM will be your signature while managing VMs):
-        
+
         export POLYGRAM=<myPOLYGRAM>
-        
+
         3. Execute the following script in a shell (to set the POLYGRAM permanently):
-        
+
         [ $OSTYPE == 'linux-gnu' ] && RC=~/.bashrc
         [ $OSTYPE == darwin* ] && RC=~/.bash_profile
         [ -e ~/.zshrc ] && RC=~/.zshrc
         echo export POLYGRAM=$POLYGRAM >>${RC} 
         source ${RC}
-        
+
         4. Create SSH KEY:
-        
+
         $ ssh-keygen -f ~/.ssh/$POLYGRAM -t rsa -b 4096
-        
+
         5. Get public key and COPY it: 
-        
+
         $ ssh-keygen -f ~/.ssh/$POLYGRAM -y
-        
+
         6. Go to AWS console under Network and Security -> Key Pair and import the public key that you copied and name it like your POLYGRAM      
         """
         logging.info(guide)
@@ -516,54 +518,80 @@ def guide_credentials(provider: str):
         guide = """
         To configure Azure credentials, you must follow the instructions below:
         (Note that you can configure everything on https://portal.azure.com/)
-        
+
         1. Create an Application:
-        
+
         az ad app create --display-name "<Your Application Display Name>" --password <Your_Password>
-        
+
         2. Create a Service principal
-        
+
         az ad sp create --id "<Application_Id>"
-        
+
         3 . Assign roles
-        
+
         az role assignment create --assignee "<Object_Id>" --role Owner --scope /subscriptions/{subscriptionId}/
-        
+
         4. Create a file in /HOME/.azure/credentials.txt and store the credentials you created as follows:
-        
+
         [default]
         subscription_id=XXXXXXXXXXXXXXXXXXX
         client_id=XXXXXXXXXXXXXXXXXXX
         secret=XXXXXXXXXXXXXXXXXXX
         tenant=XXXXXXXXXXXXXXXXXXX
-        
+
         3. Create a Resource Group:
-        
+
         az group create -l <myRegion> -n <MyResourceGroup>
         (run 'az account list-locations' if you don't know the regions names)
-        
+
         4. Create a Virtual Network
-        
+
         az network vnet create --name <myVirtualNetwork> --resource-group <myResourceGroup> --subnet-name <default>  
         """
 
 
 def auto_config(provider: str):
     if provider == 'AWS':
-        # Credentials
         aws_login = "aws configure"
-        os.system(aws_login)
+        # Credentials
+        try:
+            os.system(aws_login)
+        except:
+            try:
+                install_aws_cli = "pip3 install awscli --upgrade --user"
+                os.system(install_aws_cli)
+                os.system(aws_login)
+            except:
+                logging.warning("Error, cannot get the AWS CLI")
 
         # Polygram
         logging.info("Enter your Polygram (this will be your signature while managing VMs) :")
-        polygram_input = input()
+        polygram = input()
+
+        if platform.system() == 'Linux':
+            rc = str(Path.home()) + "/.bashrc"
+        elif platform.system() == 'Darwin':
+            rc = str(Path.home()) + "/.bash_profile"
+        else:
+            logging.warning("OS not supported")
+            sys.exit(1)
+        if os.path.isfile("/home/antoinebourayne/.zshrc"):
+            rc = str(Path.home()) + "/.zshrc"
+
+        with open('/home/antoinebourayne/.bashrc', 'a') as file:
+            bash_line = "export POLYGRAM=" + polygram
+            file.write('\n' + bash_line + '\n')
+
+        os.system(". " + rc)
 
         # SSH Key-Pair
-        create_key_pair_command = "(cd " + str(Path.home()) + ".ssh &&"\
-                          " aws ec2 create-key-pair --key-name " + os.environ['POLYGRAM'] + \
-                          " --output text > " + os.environ['POLYGRAM'] + ".pem &&"\
-                          " chmod 400 " + os.environ['POLYGRAM'] + ".pem"
+        create_key_pair_command = "(cd " + str(Path.home()) + "/.ssh &&" \
+                                  " aws ec2 create-key-pair --key-name " + os.environ['POLYGRAM'] + \
+                                  " --output text > " + os.environ['POLYGRAM'] + ".pem &&" \
+                                  " chmod 400 " + os.environ['POLYGRAM'] + ".pem)"
         os.system(create_key_pair_command)
+        logging.info("Configuration done, you can now run 'python sshcrosscloud/__init__.py --provider aws'")
+
 
 def display_aws_instance_characteristics(ssh: SSHCrossCloud):
     logging.info("----------------------------------------------------------")
@@ -572,8 +600,6 @@ def display_aws_instance_characteristics(ssh: SSHCrossCloud):
     logging.info("Region: " + ssh.env['REGION'])
     logging.info("Type: " + ssh.env['INSTANCE_TYPE'])
     logging.info("Image Id: " + ssh.env['IMAGE_ID'])
-    logging.info("Key name: " + ssh.env['AWS_KEY_NAME'])
-    logging.info("Tags: " + ssh.env['AWS_TAGS'])
     logging.info("----------------------------------------------------------")
 
 
@@ -615,7 +641,7 @@ def arg_finish():
 def arg_config():
     # guide_credentials(os.environ["PROVIDER"])
     if os.environ['PROVIDER'] == 'AWS':
-        auto_config(provider=os.environ['PROVIDER'])
+        auto_config(os.environ['PROVIDER'])
     sys.exit(0)
 
 
@@ -824,9 +850,9 @@ def create_instance(ssh: SSHCrossCloud):
 
         # Node Creation
         node = ssh.driver.create_node(name=ssh.env['INSTANCE_NAME'],
-                                  image=image,
-                                  size=size,
-                                  ex_metadata=metadata)
+                                      image=image,
+                                      size=size,
+                                      ex_metadata=metadata)
 
     # wait_until_running only takes arrays as arguments
     nodes = [node]

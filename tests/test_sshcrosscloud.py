@@ -11,7 +11,7 @@ class Test(TestCase):
 
         ssh.defaultdict['TESTDICT'] = 'ok'
 
-        fake_dotenv = open(".env", "a")
+        fake_dotenv = open("../.env", "a")
         fake_dotenv.write("\nTESTDOTENV=ok\n")
         fake_dotenv.close()
 
@@ -24,11 +24,11 @@ class Test(TestCase):
         assert ssh.env['TESTENV'] == "ok"
 
         # erase testing data
-        fin = open(".env", "rt")
+        fin = open("../.env", "rt")
         data = fin.read()
         data = data.replace('\nTESTDOTENV=ok', '')
         fin.close()
-        fin = open(".env", "wt")
+        fin = open("../.env", "wt")
         fin.write(data)
         fin.close()
         del environ['TESTENV']
@@ -41,18 +41,18 @@ class Test(TestCase):
 
     def test_sshds_init_env_dotenv_only(self):
         ssh = SSHCrossCloud()
-        dotenv = open(".env", "a")
+        dotenv = open("../.env", "a")
         dotenv.write("TESTDOTENV=ok\n")
         dotenv.close()
         ssh.set_env()
         assert ssh.env['TESTDOTENV'] == "ok"
 
         # erase testing data
-        fin = open(".env", "rt")
+        fin = open("../.env", "rt")
         data = fin.read()
         data = data.replace('\nTESTDOTENV=ok', '')
         fin.close()
-        fin = open(".env", "wt")
+        fin = open("../.env", "wt")
         fin.write(data)
         fin.close()
 
