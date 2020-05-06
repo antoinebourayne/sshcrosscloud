@@ -17,7 +17,7 @@ import sys
 
 """
 
-SSH-EC2 Python Version
+SSH-CROSS-CLOUD
 
 """
 
