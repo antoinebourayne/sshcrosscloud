@@ -1,3 +1,4 @@
+import getpass
 import getpass as gt
 import subprocess
 import time
@@ -19,6 +20,32 @@ SSH-EC2 Python Version
 
 """
 
+aws_default_dict = {
+        'FINAL_STATE': 'leave',
+        'REGION': "eu-central-1",
+        'INSTANCE_TYPE': "t2.micro",
+        'USER_DATA': "",
+        'SECURITY_GROUP': "homeANBO",
+        'IMAGE_ID': "ami-0e342d72b12109f91",
+        'IMAGE_NAME': "ubuntu"
+}
+
+azure_default_dict = {
+        'FINAL_STATE': 'leave',
+        'REGION': "us-central1-a",
+        'INSTANCE_TYPE': "f1-micro",
+        'IMAGE_NAME': "ubuntu",
+        'USER_DATA': "",
+        'IMAGE_ID': "UbuntuServer:16.04",
+    }
+
+gcp_default_dict = {
+        'FINAL_STATE': 'leave',
+        'REGION': "us-central1-a",
+        'INSTANCE_TYPE': "f1-micro",
+        'IMAGE_NAME': "ubuntu",
+        'USER_DATA': "",
+    }
 
 # TODO: remplir les "help"
 @click.command()
@@ -32,6 +59,7 @@ SSH-EC2 Python Version
 @click.option('--verbose/--no-verbose', default=False, help="")
 @click.option('--help/--no-help', default=False, help="")
 @click.option('--status/--no-status', default=False, help="")
+@click.option('--destroy/--no-destroy', default=False, help="")
 @click.option('--rsync/--no-rsync', default=True, help="")
 @click.option('--debug/--no-debug', default=False, help="")
 @click.option('--config/--no-config', default=False, help="")
@@ -42,7 +70,8 @@ SSH-EC2 Python Version
 @click.option('--r', default="", help="")
 @click.option('--i', default="", help="")
 # MAIN
-def main(leave, stop, terminate, detach, attach, finish, verbose, help, status, rsync, debug, config, multiplex,
+def main(leave, stop, terminate, detach, attach, finish, verbose, help, status, destroy, rsync, debug, config,
+         multiplex,
          provider, l, r, i):
     # Logs settings
     logging.getLogger().setLevel(logging.INFO)
@@ -101,6 +130,9 @@ def main(leave, stop, terminate, detach, attach, finish, verbose, help, status, 
     if status:
         arg_status()
 
+    if destroy:
+        arg_destroy()
+
     """-----------------Here call methods---------------------"""
     logging.info('-----SSH CROSS CLOUD-----')
 
@@ -129,101 +161,73 @@ def main(leave, stop, terminate, detach, attach, finish, verbose, help, status, 
         # When done synchronize back to local directory
         rsync_back_to_local(ssh)
 
+        # How to finish process
+        finish_action(ssh)
+
     logging.info('SSH CROSS CLOUD - END')
     """-------------------------------------------------------"""
 
 
 # SshDataScience object contains and initializes the variables
 class SSHCrossCloud:
-    # Environments
-    basenv = {}
-    env = {}
-    dotenv = {}
-
-    # for aws
-    default_user_list = {}
-    tags = {}
-
-    defaultdict = {
-        'FINAL_STATE': 'terminate',
-        'REGION': "westus",
-        'INSTANCE_TYPE': "B1ls",
-        'IMAGE_NAME': "Amazon Linux 2 AMI 2.0.20200304.0 x86_64 HVM gp2*",
-        'IAM_INSTANCE_PROFILE': "EC2ReadOnlyAccessToS3",
-        'USER_DATA': "",
-        'CREATE_SECURITY_GROUP': "no",
-        'SECURITY_GROUP': "homeANBO",
-        'IMAGE_ID': "UbuntuServer:16.04",
-
-    }
-
-    nbOfInstances = 0
+    nbOfSshConnections = 0
 
     def __init__(self):
-        # TODO: ranger en fonction des providers
-
-        self.set_default_user_list()
+        # By default is default
         self.set_env()
-        self.check_debug_mode()
-        self.env = init_variables(self.env)
+        self.env = init_variables(self)
 
-        # Credentials
-        if self.env['PROVIDER'] == "AWS":
-            self.env['AWS_ACCESS_KEY_ID'], self.env['AWS_SECRET_ACCESS_KEY'] = get_aws_credentials(self)
-        if self.env['PROVIDER'] == "AZURE":
-            self.env['AZURE_TENANT_ID'], self.env['AZURE_SUBSCRIPTION_ID'], self.env['AZURE_APPLICATION_ID'], self.env[
-                'AZURE_SECRET'] = get_azure_credentials(self)
+        # Credentials and provider specifics
+        set_provider_specifics(self)
 
         # Driver can be instantiated only after getting credentials
         self.driver = create_driver(self)
 
-        # Resource Group is proper to Azure
-        if self.env['PROVIDER'] == "AZURE":
-            self.env['AZ_RESOURCE_GROUP'] = get_azure_resource_group(self).name
-
-        self.env['INSTANCE_USER'] = self.get_instance_user()
+        # These variables can only be set after the driver set
         self.env['INSTANCE_ID'] = get_instance_id_from_name(self)
         self.env['PUBLIC_IP'] = get_public_ip(self)
-        self.env['OS_NAME'] = get_os_name()
-        self.env['USER_DATA'] = get_string_from_file(".user_data")
-
-    def set_default_user_list(self):
-        self.default_user_list = {
-            'Amazon Linux': 'ec2-user',
-            'ubuntu': 'ubuntu',
-            'RHEL 6.[0-3]': 'root',
-            'RHEL 6.[0-9]+': 'ec2-user',
-            'Fedora': 'fedora',
-            'Centos': 'centos',
-            'SUSE': 'ec2-user',
-            'BitNami': 'bitnami',
-            'TurnKey': 'root',
-            'NanoStack': 'ubuntu',
-            'FreeBSD': 'ec2-user',
-            'OmniOS': 'root',
-        }
 
     def set_env(self):
         """
         A la fin de la fonction, env possède les valeurs mélangées de
         default, puis .env, puis environ.
         """
-        # Create default dict
+        if os.environ['PROVIDER'] == 'AWS':
+            self.default_dict = aws_default_dict
+        elif os.environ['PROVIDER'] == 'AZURE':
+            self.default_dict = azure_default_dict
+        elif os.environ['PROVIDER'] == 'GCP':
+            self.default_dict = gcp_default_dict
+        else:
+            logging.warning("Provider not supported")
+            sys.exit(1)
+        # dotenv values are taken form .env file
         dotenv = dotenv_values(find_dotenv())
-        self.env = self.replace_default_env(self.defaultdict, dotenv, environ)
-
-    def check_debug_mode(self):
-        if 'DEBUG' in self.env:
-            if self.env['DEBUG'] == "y":
-                self.env["FINAL_STATE"] = "leave"
+        self.env = self.replace_default_env(self.default_dict, dotenv, environ)
 
     def get_instance_user(self):
         if self.env['PROVIDER'] == "AWS":
-            for i, j in self.default_user_list.items():
+            default_user_list = {
+                'Amazon Linux': 'ec2-user',
+                'ubuntu': 'ubuntu',
+                'RHEL 6.[0-3]': 'root',
+                'RHEL 6.[0-9]+': 'ec2-user',
+                'Fedora': 'fedora',
+                'Centos': 'centos',
+                'SUSE': 'ec2-user',
+                'BitNami': 'bitnami',
+                'TurnKey': 'root',
+                'NanoStack': 'ubuntu',
+                'FreeBSD': 'ec2-user',
+                'OmniOS': 'root',
+            }
+            for i, j in default_user_list.items():
                 if i.lower() in self.env['IMAGE_NAME'].lower():
                     return j
         if self.env['PROVIDER'] == "AZURE":
             return "azure"
+        if self.env['PROVIDER'] == "GCP":
+            return getpass.getuser()
 
     # Initialization methods
     def replace_default_env(self, defaultenv, dotenv, basenv):
@@ -246,7 +250,7 @@ class SSHCrossCloud:
 
 
 # Getters and inits
-def getlogin() -> str:
+def get_login() -> str:
     return gt.getuser()
 
 
@@ -276,6 +280,7 @@ def create_driver(ssh: SSHCrossCloud):
     """
     AWS EC2  : AWS
     Azure VM : AZURE
+    Google Compute Engine : GCP
     :param env:
     :return:
     """
@@ -285,19 +290,26 @@ def create_driver(ssh: SSHCrossCloud):
             driver = cls(ssh.env["AWS_ACCESS_KEY_ID"],
                          ssh.env["AWS_SECRET_ACCESS_KEY"],
                          region=ssh.env["REGION"])
-            return driver
-        if ssh.env["PROVIDER"] == "AZURE":
+        elif ssh.env["PROVIDER"] == "AZURE":
             cls = get_driver(Provider.AZURE_ARM)
             driver = cls(tenant_id=ssh.env["AZURE_TENANT_ID"],
                          subscription_id=ssh.env["AZURE_SUBSCRIPTION_ID"],
                          key=ssh.env["AZURE_APPLICATION_ID"],
                          secret=ssh.env["AZURE_SECRET"])
-            return driver
+        elif ssh.env["PROVIDER"] == "GCP":
+            cls = get_driver(Provider.GCE)
+            driver = cls(user_id=ssh.env['GCP_USER_ID'],
+                         key=ssh.env['GCP_KEY_PATH'],
+                         project=ssh.env['GCP_PROJECT'],
+                         datacenter=ssh.env['GCP_DATA_CENTER'])
+        else:
+            logging.info("Provider not supported")
+            sys.exit(1)
+
+        return driver
     except:
-        if "BaseHTTPError" in sys.exc_info()[0]:
-            logging.warning("Could not get driver, your credentials might be wrong or obsolete")
-        if "ConnectionError" in sys.exc_info()[0]:
-            logging.warning("Could not get driver, connection error")
+        logging.warning("Could not get driver")
+        abort()
 
 
 def get_aws_credentials(ssh: SSHCrossCloud):
@@ -360,12 +372,53 @@ def get_azure_resource_group(ssh: SSHCrossCloud):
         return rg
 
 
+def get_gcp_credentials(ssh: SSHCrossCloud):
+    if os.path.isfile(str(Path.home()) + "/.gcp/credentials.txt"):
+        with open(str(Path.home()) + "/.gcp/credentials.txt", 'r') as file:
+            data = file.read()
+
+            start = 'user_id='
+            end = '\n'
+            user_id = (data.split(start))[1].split(end)[0]
+
+            start = 'key='
+            end = '\n'
+            key = (data.split(start))[1].split(end)[0]
+
+            start = 'project='
+            end = '\n'
+            project = (data.split(start))[1].split(end)[0]
+
+            start = 'datacenter='
+            end = '\n'
+            datacenter = (data.split(start))[1].split(end)[0]
+
+            return user_id, key, project, datacenter
+    else:
+        logging.warning("No credentials found in " + str(Path.home()) + "/.gcp/credentials.txt")
+        logging.info(
+            "Please run 'sshcrosscloud --config --provider " + ssh.env['PROVIDER'] + "' to configure credentials")
+        abort()
+
+
+def set_provider_specifics(ssh: SSHCrossCloud):
+    if ssh.env['PROVIDER'] == "AWS":
+        ssh.env['AWS_ACCESS_KEY_ID'], ssh.env['AWS_SECRET_ACCESS_KEY'] = get_aws_credentials(ssh)
+    elif ssh.env['PROVIDER'] == "AZURE":
+        ssh.env['AZURE_TENANT_ID'], ssh.env['AZURE_SUBSCRIPTION_ID'], ssh.env['AZURE_APPLICATION_ID'], ssh.env[
+            'AZURE_SECRET'] = get_azure_credentials(ssh)
+    elif ssh.env['PROVIDER'] == "GCP":
+        ssh.env['GCP_USER_ID'], ssh.env['GCP_KEY_PATH'], ssh.env['GCP_PROJECT'], ssh.env[
+            'GCP_DATA_CENTER'] = get_gcp_credentials(ssh)
+    else:
+        logging.info("Provider not supported")
+
+
 def get_instance_id_from_name(ssh: SSHCrossCloud):
     if ssh.env['PROVIDER'] == "AZURE":
         nodes = ssh.driver.list_nodes(ssh.env['AZ_RESOURCE_GROUP'])
-    if ssh.env['PROVIDER'] == "AWS":
+    else:
         nodes = ssh.driver.list_nodes()
-
     for node in nodes:
         if node.name == ssh.env['INSTANCE_NAME'] and node.state not in ["terminated", "unknown"]:
             return node.id
@@ -374,79 +427,88 @@ def get_instance_id_from_name(ssh: SSHCrossCloud):
 def get_public_ip(ssh: SSHCrossCloud):
     if ssh.env['PROVIDER'] == "AZURE":
         nodes = ssh.driver.list_nodes(ssh.env['AZ_RESOURCE_GROUP'])
-    if ssh.env['PROVIDER'] == "AWS":
+    else:
         nodes = ssh.driver.list_nodes()
-
     if ssh.env.get('INSTANCE_ID'):
         for node in nodes:
-            # TODO : s'occuper des states, il y a d'autres states que "running" à gérer
             if node.id == ssh.env['INSTANCE_ID'] and node.state == "running":
                 public_ip = node.public_ips[0]
                 return public_ip
 
 
-def init_variables(env):
+def init_variables(ssh: SSHCrossCloud):
     """
     A la fin de la fonction, env possède le maximum de variables d'environement
     calculés, pour ne plus avoir à gérer les erreurs ou les valeurs par défaut.
     """
-    env['PROJECT_NAME'] = os.path.basename(os.getcwd())
-    if not env.get("TRIGRAM"):
-        env["TRIGRAM"] = getlogin()
-    if not env.get('AWS_KEY_NAME'):
-        env['AWS_KEY_NAME'] = env['TRIGRAM']
-    if not env.get('INSTANCE_NAME'):
-        env['INSTANCE_NAME'] = env['AWS_KEY_NAME'] + "-" + env['PROJECT_NAME']
-    if not env.get('AWS_RSYNC_DIR'):
-        env['AWS_RSYNC_DIR'] = os.getcwd()
-    if not env.get("REGION"):
-        env["REGION"] = get_region()
+    ssh.env['PROJECT_NAME'] = os.path.basename(os.getcwd())
+    if not ssh.env.get("POLYGRAM"):
+        ssh.env["POLYGRAM"] = get_login()
+    if not ssh.env.get('AWS_KEY_NAME'):
+        ssh.env['AWS_KEY_NAME'] = ssh.env['POLYGRAM']
+    if not ssh.env.get('INSTANCE_NAME'):
+        ssh.env['INSTANCE_NAME'] = ssh.env['AWS_KEY_NAME'].lower() + "-" + ssh.env['PROJECT_NAME']
+    if not ssh.env.get('AWS_RSYNC_DIR'):
+        ssh.env['AWS_RSYNC_DIR'] = os.getcwd()
+    if not ssh.env.get("REGION"):
+        ssh.env["REGION"] = get_region()
+
+    if 'DEBUG' in ssh.env:
+        if ssh.env['DEBUG'] == "y":
+            ssh.env["FINAL_STATE"] = "leave"
+
+
+    ssh.env['OS_NAME'] = get_os_name()
+    ssh.env['USER_DATA'] = get_string_from_file(".user_data")
+    ssh.env['INSTANCE_USER'] = ssh.get_instance_user()
 
     tags = {
-        'Name': env['INSTANCE_NAME'],
-        'User': getlogin(),
+        'Name': ssh.env['INSTANCE_NAME'],
+        'User': get_login(),
         'Hostname': socket.gethostname(),
-        'TRIGRAM': env['TRIGRAM']
+        'POLYGRAM': ssh.env['POLYGRAM']
     }
 
-    env['AWS_TAGS'] = "[" + str(tags) + "]"
+    ssh.env['AWS_TAGS'] = "[" + str(tags) + "]"
 
-    return env
+    return ssh.env
 
+
+# TODO : changer nom POLYGRAM
 
 def guide_credentials(provider: str):
     if provider == 'AWS':
         guide = """
         To configure AWS credentials, you must follow the instructions below:
         
-        1. You need to create an AWS account, then IAM console -> Users -> User Actions -> Manage Access Keys -> Create Access Key
+        1. You  need to create an AWS account, then IAM console -> Users -> User Actions -> Manage Access Keys -> Create Access Key
         Store this pair of keys in 'HOME/.aws/credentials' as follows:
         
         [default]
         aws_access_key_id = XXXXXXXXXXXXXXXXXXX
         aws_secret_access_key = XXXXXXXXXXXXXXXXXXX
         
-        2. Execute the following script in a shell (the TRIGRAM will be your signature while managing VMs):
+        2. Execute the following script in a shell (the POLYGRAM will be your signature while managing VMs):
         
-        export TRIGRAM=<myTrigram>
+        export POLYGRAM=<myPOLYGRAM>
         
-        3. Execute the following script in a shell (to set the TRIGRAM permanently):
+        3. Execute the following script in a shell (to set the POLYGRAM permanently):
         
         [ $OSTYPE == 'linux-gnu' ] && RC=~/.bashrc
         [ $OSTYPE == darwin* ] && RC=~/.bash_profile
         [ -e ~/.zshrc ] && RC=~/.zshrc
-        echo export TRIGRAM=$TRIGRAM >>${RC} 
+        echo export POLYGRAM=$POLYGRAM >>${RC} 
         source ${RC}
         
         4. Create SSH KEY:
         
-        $ ssh-keygen -f ~/.ssh/$TRIGRAM -t rsa -b 4096
+        $ ssh-keygen -f ~/.ssh/$POLYGRAM -t rsa -b 4096
         
-        5. Get public key and COPY IT: 
+        5. Get public key and COPY it: 
         
-        $ ssh-keygen -f ~/.ssh/$TRIGRAM -y
+        $ ssh-keygen -f ~/.ssh/$POLYGRAM -y
         
-        6. Go to AWS console under Network and Security -> Key Pair and import the public key that you copied and name it like your TRIGRAM      
+        6. Go to AWS console under Network and Security -> Key Pair and import the public key that you copied and name it like your POLYGRAM      
         """
         logging.info(guide)
 
@@ -486,6 +548,23 @@ def guide_credentials(provider: str):
         """
 
 
+def auto_config(provider: str):
+    if provider == 'AWS':
+        # Credentials
+        aws_login = "aws configure"
+        os.system(aws_login)
+
+        # Polygram
+        logging.info("Enter your Polygram (this will be your signature while managing VMs) :")
+        polygram_input = input()
+
+        # SSH Key-Pair
+        create_key_pair_command = "(cd " + str(Path.home()) + ".ssh &&"\
+                          " aws ec2 create-key-pair --key-name " + os.environ['POLYGRAM'] + \
+                          " --output text > " + os.environ['POLYGRAM'] + ".pem &&"\
+                          " chmod 400 " + os.environ['POLYGRAM'] + ".pem"
+        os.system(create_key_pair_command)
+
 def display_aws_instance_characteristics(ssh: SSHCrossCloud):
     logging.info("----------------------------------------------------------")
     logging.info("Provider: " + ssh.env['PROVIDER'])
@@ -514,14 +593,14 @@ def arg_terminate():
 
 
 def arg_detach():
-    os.environ["FINAL_STATE"] = "terminate"
+    os.environ["FINAL_STATE"] = "leave"
     os.environ["SSH_DETACH"] = "y"
-    if os.environ["SSH_DETACH"] == "":
-        os.environ["MULTIPLEX"] = "tmux"
+    os.environ["MULTIPLEX"] = "y"
+    os.environ["NO_RSYNC_END"] = "y"
 
 
 def arg_attach():
-    os.environ["MULTIPLEX"] = "tmux"
+    os.environ["MULTIPLEX"] = "y"
     os.environ["SSH_ATTACH"] = "y"
     os.environ["FINAL_STATE"] = "leave"
     os.environ["NO_RSYNC_BEGIN"] = "y"
@@ -529,12 +608,20 @@ def arg_attach():
 
 
 def arg_finish():
-    os.environ["MULTIPLEX"] = "tmux"
     os.environ["NO_RSYNC_BEGIN"] = "y"
+    os.environ["NO_ATTACH"] = "y"
 
 
 def arg_config():
-    guide_credentials(os.environ["PROVIDER"])
+    # guide_credentials(os.environ["PROVIDER"])
+    if os.environ['PROVIDER'] == 'AWS':
+        auto_config(provider=os.environ['PROVIDER'])
+    sys.exit(0)
+
+
+def arg_destroy():
+    ssh = SSHCrossCloud()
+    terminate_instance(ssh)
     sys.exit(0)
 
 
@@ -580,6 +667,17 @@ def arg_verbose():
 
 
 def arg_help():
+    help_text = """
+    Launch instance, connects to it and leave it alive                          sshcrosscloud.py
+    Launch instance, connects to it and stops it (state is saved)	            sshcrosscloud.py --stop
+    Launch instance, connects to it and leave it alive           	            sshcrosscloud.py --leave
+    Launch instance, launch your command on tmux session         	            sshcrosscloud.py --detach --multiplex "<some command>" 
+    Launch instance, connects on a tmux session 	                            sshcrosscloud.py --detach
+    Launch instance, connects on a tmux session and attach to it                sshcrosscloud.py --attach
+    Synchronize instance directory to local and destroy instance              	sshcrosscloud.py --finish
+    Force destruction of the instance    	                                    sshcrosscloud.py --destroy
+    """
+    logging.info(help_text)
     sys.exit(0)
 
 
@@ -593,7 +691,7 @@ def arg_status():
 def display_instances(ssh: SSHCrossCloud):
     if ssh.env['PROVIDER'] == "AZURE":
         nodes = ssh.driver.list_nodes(ssh.env['AZ_RESOURCE_GROUP'])
-    if ssh.env['PROVIDER'] == "AWS":
+    else:
         nodes = ssh.driver.list_nodes()
 
     if not nodes:
@@ -622,14 +720,14 @@ def create_instance(ssh: SSHCrossCloud):
 
         # Image
         images = ssh.driver.list_images()
-        image = [i for i in images if i.id == ssh.env['IMAGE_ID']][0]
+        image = [i for i in images if ssh.env['IMAGE_ID'] == i.id][0]
 
         # Node Creation
         node = ssh.driver.create_node(name=ssh.env['INSTANCE_NAME'],
                                       image=image,
                                       size=size,
                                       ex_userdata=ssh.env['USER_DATA'],
-                                      ex_keyname=ssh.env["TRIGRAM"],
+                                      ex_keyname=ssh.env["POLYGRAM"],
                                       ex_securitygroup=ssh.env["SECURITY_GROUP"])
 
     if ssh.env['PROVIDER'] == "AZURE":
@@ -698,22 +796,52 @@ def create_instance(ssh: SSHCrossCloud):
                                       ex_use_managed_disks=True,
                                       ex_nic=ni,
                                       location=location,
-                                      ex_storage_account="toto"  # this argument is useless, but libcloud requires it
+                                      ex_storage_account="useless"  # this argument is useless, but libcloud requires it
                                       )
+
+    if ssh.env['PROVIDER'] == "GCP":
+        # Location
+        locations = ssh.driver.list_locations()
+        location = [l for l in locations if ssh.env['REGION'] in l.name][0]
+
+        # Image
+        images = ssh.driver.list_images()
+        image = [i for i in images if ssh.env['IMAGE_NAME'] in i.name][0]
+
+        # Size
+        sizes = ssh.driver.list_sizes()
+        size = [s for s in sizes if ssh.env["INSTANCE_TYPE"] in s.name][0]
+
+        # Metadata (ssh-key)
+        metadata = {
+            "items": [
+                {
+                    "key": "ssh-keys",
+                    "value": "antoinebourayne:" + get_public_key()
+                }
+            ]
+        }
+
+        # Node Creation
+        node = ssh.driver.create_node(name=ssh.env['INSTANCE_NAME'],
+                                  image=image,
+                                  size=size,
+                                  ex_metadata=metadata)
 
     # wait_until_running only takes arrays as arguments
     nodes = [node]
 
-    list_node_args = ""
+    logging.info("Initializating instance...")
 
     # Azure needs a specified resource group
     if ssh.env['PROVIDER'] == "AZURE":
         list_node_args = {'ex_resource_group': 'NetworkWatcherRG'}
+        retour = ssh.driver.wait_until_running(nodes=nodes, ex_list_nodes_kwargs=list_node_args)[0]
+    else:
+        # TODO : ne marche pas pour GCP
+        retour = ssh.driver.wait_until_running(nodes=nodes)[0]
 
-    logging.info("Initializating instance...")
-    retour = ssh.driver.wait_until_running(nodes=nodes, ex_list_nodes_kwargs=list_node_args)[0]
-
-    # retour[0] : wait_until_running returns a tuple [(Node, ip_addresses)]
+    # retour[0] : (wait_until_running) returns a tuple [(Node, ip_addresses)]
     if not retour[0].public_ips:
         logging.warning("No public IP available")
         return 1
@@ -736,11 +864,15 @@ def wait_until_initialization(ssh: SSHCrossCloud):
     # Try to connect to instance for a few times
     while i < 10:
         logging.info("Trying to connect... (" + str(i + 1) + ")")
-
         try:
-            # Works like a ping to know if ssh is ok
-            ssh_return = "ssh -i $HOME/.ssh/" + ssh.env['TRIGRAM'] + " " + ssh.env['INSTANCE_USER'] + "@" + ssh.env[
-                'PUBLIC_IP'] + " exit && echo $?"
+            if ssh.env.get('DEBUG'):
+                # Works like a ping to know if ssh is ok
+                ssh_return = "ssh -v -i $HOME/.ssh/" + ssh.env['POLYGRAM'] + " " + ssh.env['INSTANCE_USER'] + "@" + \
+                             ssh.env['PUBLIC_IP'] + " exit && echo $?"
+            else:
+                # Works like a ping to know if ssh is ok
+                ssh_return = "ssh -i $HOME/.ssh/" + ssh.env['POLYGRAM'] + " " + ssh.env['INSTANCE_USER'] + "@" + \
+                             ssh.env['PUBLIC_IP'] + " exit && echo $?"
             output_test = subprocess.check_output(ssh_return, shell=True)
 
             if "0" in str(output_test):
@@ -759,35 +891,52 @@ def wait_until_initialization(ssh: SSHCrossCloud):
 
 def attach_to_instance(ssh: SSHCrossCloud):
     """
-    Open SSH terminal to instance
+    Open SSH terminal to instance and launch multiplex session if needed
     :param ssh:
     :return: 0 if SSH connection succeeded, 1 if not
     """
-    ssh_command = "ssh -i $HOME/.ssh/" + ssh.env['TRIGRAM'] + " " \
-                  + ssh.env['INSTANCE_USER'] + "@" + ssh.env['PUBLIC_IP']
+    if ssh.env.get('NO_ATTACH'):
+        logging.info("Skipping attach to instance")
+        return 0
+    if ssh.env.get('DEBUG'):
+        ssh_command = "ssh -v -i $HOME/.ssh/" + ssh.env['POLYGRAM'] + " " \
+                      + ssh.env['INSTANCE_USER'] + "@" + ssh.env['PUBLIC_IP']
+    else:
+        ssh_command = "ssh -i $HOME/.ssh/" + ssh.env['POLYGRAM'] + " " \
+                      + ssh.env['INSTANCE_USER'] + "@" + ssh.env['PUBLIC_IP']
+
     if not ssh.env.get('MULTIPLEX'):
         os.system(ssh_command)
         return 0
     else:
-        multiplex_command = "tmux new -s sshcrosscloud -d '" + ssh_command + "' && tmux attach-session -t sshcrosscloud"
-        os.system(multiplex_command)
+        if ssh.env.get('SSH_DETACH'):
+            multiplex_command = ssh_command + " 'tmux new-session -s sshcrosscloud -d" \
+                                + ' "' + ssh.env['MULTIPLEX'] + '"' + "'"
+            os.system(multiplex_command)
+
+        elif ssh.env.get('SSH_ATTACH'):
+            multiplex_command = ssh_command + " -t 'tmux new-session -s sshcrosscloud" \
+                                + ' "' + ssh.env['MULTIPLEX'] + '"' + "'"
+            os.system(multiplex_command)
         return 0
 
 
-def finish_instance(ssh: SSHCrossCloud):
+def finish_action(ssh: SSHCrossCloud):
     """
-    Terminates or destroys instances depending on the FINAL_STATE
+    Terminates, destroys or leaves instances depending on the FINAL_STATE
     :param ssh:
     :return:0 if OK 1 if error
     """
 
-    if ssh.env["DEBUG"] == "y":
-        logging.warning("Confirm" + ssh.env["FINAL_STATE"] + " for your instances ?")
-        confirm = input()
-        if confirm != "y":
-            abort()
+    if ssh.env["FINAL_STATE"] == "leave":
+        logging.warning("Your instance is still alive")
+        sys.exit(0)
 
-    if ssh.nbOfInstances < 2:
+    if ssh.env.get("DEBUG") == "y":
+        logging.warning("Instance final state : " + ssh.env["FINAL_STATE"])
+        abort()
+
+    if ssh.nbOfSshConnections < 2:
 
         if ssh.env["FINAL_STATE"] == "stop":
             logging.warning("Stopping instances...")
@@ -799,9 +948,9 @@ def finish_instance(ssh: SSHCrossCloud):
             terminate_instance(ssh)
 
         else:
-            if ssh.nbOfInstances > 1:
+            if ssh.nbOfSshConnections > 1:
                 ssh.env['FINAL_STATE'] = "leave"
-                logging.warning("Another connexion to EC2 instance is alive. The AWS EC2 instance is active")
+                logging.warning("Another connection to EC2 instance is alive. The AWS EC2 instance is active")
             else:
                 logging.warning("The AWS EC instance " + ssh.env['INSTANCE_NAME'] + " is alive")
 
@@ -814,8 +963,11 @@ def stop_instance(ssh: SSHCrossCloud):
     """
     if ssh.env['PROVIDER'] == "AZURE":
         nodes = ssh.driver.list_nodes(ssh.env['AZ_RESOURCE_GROUP'])
-    if ssh.env['PROVIDER'] == "AWS":
+    else:
         nodes = ssh.driver.list_nodes()
+
+    if not nodes:
+        logging.info("No instance running")
 
     for node in nodes:
         if node.id == ssh.env['INSTANCE_ID'] and node.state != "terminated":
@@ -836,7 +988,7 @@ def terminate_instance(ssh: SSHCrossCloud):
     """
     if ssh.env['PROVIDER'] == "AZURE":
         nodes = ssh.driver.list_nodes(ssh.env['AZ_RESOURCE_GROUP'])
-    if ssh.env['PROVIDER'] == "AWS":
+    else:
         nodes = ssh.driver.list_nodes()
 
     for node in nodes:
@@ -862,11 +1014,20 @@ def rsync_to_instance(ssh: SSHCrossCloud):
     :param ssh:
     :return:
     """
-    logging.info("Synchronize local directory to instance")
-    command = "rsync -Pav -e 'ssh -i " + ssh.env['HOME'] + "/.ssh/" + ssh.env[
-        'TRIGRAM'] + "'" + " --exclude-from='.rsyncignore' $HOME " + \
-              ssh.env['INSTANCE_USER'] + "@" + ssh.env['PUBLIC_IP'] + ":/home/" + ssh.env['INSTANCE_USER']
-    rsync = os.system(command)
+    if ssh.env.get('NO_RSYNC_BEGIN'):
+        logging.info("No rsync back to local")
+    else:
+        logging.info("Synchronizing local directory to instance")
+        if ssh.env.get('DEBUG'):
+            command = "rsync -v -Pav -e 'ssh -i " + ssh.env['HOME'] + "/.ssh/" + ssh.env[
+                'POLYGRAM'] + "'" + " --exclude-from='.rsyncignore' $HOME " + \
+                      ssh.env['INSTANCE_USER'] + "@" + ssh.env['PUBLIC_IP'] + ":/home/" + ssh.env['INSTANCE_USER']
+        else:
+            command = "rsync -Pav -e 'ssh -i " + ssh.env['HOME'] + "/.ssh/" + ssh.env[
+                'POLYGRAM'] + "'" + " --exclude-from='.rsyncignore' $HOME " + \
+                      ssh.env['INSTANCE_USER'] + "@" + ssh.env['PUBLIC_IP'] + ":/home/" + ssh.env['INSTANCE_USER']
+
+        rsync = os.system(command)
 
 
 def rsync_back_to_local(ssh: SSHCrossCloud):
@@ -875,9 +1036,18 @@ def rsync_back_to_local(ssh: SSHCrossCloud):
     :param ssh:
     :return:
     """
-    rsync = os.system("rsync -chavzP --stats "
-                      + ssh.env['INSTANCE_USER'] + "@" + ssh.env['PUBLIC_IP']
-                      + ":/home/" + ssh.env['INSTANCE_USER'] + "/" + ssh.env['USER'] + "/*" + " $HOME")
+    if ssh.env.get('NO_RSYNC_END'):
+        logging.info("No rsync back to local")
+    else:
+        logging.info("Synchronizing directory back to local")
+        if ssh.env.get('DEBUG'):
+            command = "rsync -v -chavzP --stats " + ssh.env['INSTANCE_USER'] + "@" + ssh.env['PUBLIC_IP'] + \
+                      ":/home/" + ssh.env['INSTANCE_USER'] + "/" + ssh.env['USER'] + "/*" + " $HOME"
+        else:
+            command = "rsync -chavzP --stats " + ssh.env['INSTANCE_USER'] + "@" + ssh.env['PUBLIC_IP'] + \
+                      ":/home/" + ssh.env['INSTANCE_USER'] + "/" + ssh.env['USER'] + "/*" + " $HOME"
+
+        rsync = os.system(command)
 
 
 def abort():

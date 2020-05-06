@@ -1,6 +1,6 @@
 import os
 from unittest import TestCase
-from sshcrosscloud import SSHCrossCloud, create_instance, wait_until_initialization, finish_instance, \
+from sshcrosscloud import SSHCrossCloud, create_instance, wait_until_initialization, \
     attach_to_instance, stop_instance, terminate_instance, display_instances
 from os import environ
 
