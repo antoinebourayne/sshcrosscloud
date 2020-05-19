@@ -1,15 +1,18 @@
 import os
 from unittest import TestCase
-from sshcrosscloud import SSHCrossCloud, create_instance, wait_until_initialization, \
+from sshcrosscloud.__main__ import SSHCrossCloud, create_instance, wait_until_initialization, \
     attach_to_instance, stop_instance, terminate_instance, display_instances
 from os import environ
 
 
 class Test(TestCase):
+    """
+    Variables initialization
+    """
     def test_sshds_init_env(self):
         ssh = SSHCrossCloud()
 
-        ssh.defaultdict['TESTDICT'] = 'ok'
+        ssh.default_dict['TESTDICT'] = 'ok'
 
         fake_dotenv = open("../.env", "a")
         fake_dotenv.write("\nTESTDOTENV=ok\n")
@@ -63,27 +66,24 @@ class Test(TestCase):
         assert ssh.env['TESTENV'] == "ok"
         del environ['TESTENV']
 
-    def test_sshds_init_default_user_list(self):
-        ssh = SSHCrossCloud()
-        user_list = {
-            'Amazon Linux': 'ec2-user',
-            'ubuntu': 'ubuntu',
-            'RHEL 6.[0-3]': 'root',
-            'RHEL 6.[0-9]+': 'ec2-user',
-            'Fedora': 'fedora',
-            'Centos': 'centos',
-            'SUSE': 'ec2-user',
-            'BitNami': 'bitnami',
-            'TurnKey': 'root',
-            'NanoStack': 'ubuntu',
-            'FreeBSD': 'ec2-user',
-            'OmniOS': 'root',
-        }
-        assert ssh.default_user_list == user_list
+    """
+    Methods related to Libcloud
+    """
 
-    def test_display_instances(self):
+    def test_aws_create_driver(self):
+        os.environ['PROVIDER'] = 'AWS'
         ssh = SSHCrossCloud()
-        display_instances(ssh)
+        assert ssh.driver is not None
+
+    def test_azure_create_driver(self):
+        os.environ['PROVIDER'] = 'AZURE'
+        ssh = SSHCrossCloud()
+        assert ssh.driver is not None
+
+    def test_gcp_create_driver(self):
+        os.environ['PROVIDER'] = 'GCP'
+        ssh = SSHCrossCloud()
+        assert ssh.driver is not None
 
     def test_create_aws_instance(self):
         ssh = SSHCrossCloud()
@@ -111,3 +111,8 @@ class Test(TestCase):
         os.environ['PROVIDER'] = 'AZURE'
         ssh = SSHCrossCloud()
         assert terminate_instance(ssh) == 0
+
+
+    """
+    Methods Using Shell
+    """
