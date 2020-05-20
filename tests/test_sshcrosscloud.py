@@ -86,18 +86,29 @@ class Test(TestCase):
         assert ssh.driver is not None
 
     def test_create_aws_instance(self):
+        os.environ['PROVIDER'] = 'AWS'
         ssh = SSHCrossCloud()
-        terminate_instance(ssh)
         assert create_instance(ssh) == 0
+        terminate_instance(ssh)
 
-    def test_wait_until_initialization_no_instance(self):
+    def test_create_azure_instance(self):
+        os.environ['PROVIDER'] = 'AZURE'
+        ssh = SSHCrossCloud()
+        assert create_instance(ssh) == 0
+        terminate_instance(ssh)
+
+    def test_create_gcp_instance(self):
+        os.environ['PROVIDER'] = 'GCP'
+        ssh = SSHCrossCloud()
+        assert create_instance(ssh) == 0
+        terminate_instance(ssh)
+
+    def test_wait_until_initialization(self):
+        os.environ['PROVIDER'] = 'AWS'
         ssh = SSHCrossCloud()
         create_instance(ssh)
         assert wait_until_initialization(ssh) == 0
-
-    def test_wait_until_initialization_with_instance(self):
-        ssh = SSHCrossCloud()
-        assert wait_until_initialization(ssh) == 0
+        terminate_instance(ssh)
 
     def test_attach_to_instance(self):
         ssh = SSHCrossCloud()

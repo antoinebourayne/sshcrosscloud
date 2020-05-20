@@ -167,7 +167,6 @@ def main():
     connection_result = wait_until_initialization(ssh)
 
     if connection_result == 0:
-        pass
         # Copy directory from local computer to instance
         rsync_to_instance(ssh)
 
@@ -282,7 +281,7 @@ def get_public_key(name: str) -> str:
             rsa_pub = file.read()
         return rsa_pub
     except:
-        logging.info("No key at :" + str(Path.home()) + ".ssh/" + name + + ".pub")
+        logging.info("Could not key find at :" + str(Path.home()) + ".ssh/" + name + + ".pub")
 
 
 def get_string_from_file(filepath):
@@ -293,7 +292,7 @@ def get_string_from_file(filepath):
 def get_region():
     with open(str(Path.home()) + ".aws/config", 'r') as file:
         data = file.read().replace('\n', '')
-        REGION = data.split("region = ", 1)[1]
+        REGION = data.split("region=", 1)[1]
         return REGION
 
 
@@ -310,20 +309,50 @@ def set_credentials():
                     logging.info("Credentials have not been changed")
                     return 0
         with open(str(Path.home()) + "/.aws/credentials", 'w') as file:
+
             logging.info("Enter AWS ACCESS KEY ID:")
             aws_access_key_id = input()
             logging.info("Enter AWS SECRET ACCESS ID:")
             aws_secret_access_key = input()
+            logging.info("Enter REGION : (default eu-central-1)")
+            aws_region = input()
+
             old_aws_access_key_id = (file_data.split('aws_access_key_id='))[1].split('\n')[0]
             file_data = file_data.replace(old_aws_access_key_id, aws_access_key_id)
             old_aws_secret_access_key = (file_data.split('aws_secret_access_key='))[1].split('\n')[0]
             file_data = file_data.replace(old_aws_secret_access_key, aws_secret_access_key)
+
             file.write(file_data)
             logging.info("Credentials have been saved")
+
             return 0
     else:
-        logging.warning("AWS Credentials file does not exist")
-        return 1
+        logging.warning(".aws/credentials file does not exist")
+
+    if os.path.isfile(str(Path.home()) + "/.aws/config"):
+        with open(str(Path.home()) + "/.aws/config", 'r+') as file:
+            file_data = file.read()
+            if file_data:
+                logging.info("A region have already been saved, would you like to change it? y/n")
+                answer = input()
+                if answer == 'y':
+                    pass
+                else:
+                    logging.info("Region have not been changed")
+                    return 0
+        with open(str(Path.home()) + "/.aws/config", 'w') as file:
+
+            logging.info("Enter REGION : (default eu-central-1)")
+            aws_region = input()
+
+            old_aws_region = (file_data.split('region='))[1].split('\n')[0]
+            file_data = file_data.replace(old_aws_region, aws_region)
+
+            file.write(file_data)
+            logging.info("Credentials have been saved")
+
+    else:
+        logging.warning(".aws/config Config file does not exist")
 
 
 def provider_config(ssh: SSHCrossCloud):
@@ -628,6 +657,7 @@ def arg_attach():
 
 
 def arg_finish():
+    # TODO: 2 cas, un tmux, un pas tmux
     os.environ["NO_RSYNC_BEGIN"] = "y"
 
 
@@ -716,11 +746,8 @@ def display_instances(ssh: SSHCrossCloud):
     logging.info("------------------------------------------------------")
 
 
-def set_security_group(ssh: SSHCrossCloud):
-    logging.info("Adding your IP address to the security group")
-
+def create_security_group(ssh: SSHCrossCloud):
     ssh.driver.ex_create_security_group(ssh.env['SECURITY_GROUP'], ssh.env['SECURITY_GROUP'] + " security group")
-
     security_groups = ssh.driver.ex_list_security_groups()
     security_group = [sg for sg in security_groups if ssh.env['SECURITY_GROUP'] == sg][0]
 
@@ -752,10 +779,10 @@ def create_instance(ssh: SSHCrossCloud):
             elif ssh.env['USERNAME'] in security_groups:
                 security_group = ssh.env['USERNAME']
             else:
-                security_group = set_security_group(ssh)
+                security_group = create_security_group(ssh)
         else:
             ssh.env['SECURITY_GROUP'] = ssh.env['USERNAME']
-            security_group = set_security_group(ssh)
+            security_group = create_security_group(ssh)
 
         # Node Creation
         node = ssh.driver.create_node(name=ssh.env['INSTANCE_NAME'],
@@ -952,6 +979,7 @@ def attach_to_instance(ssh: SSHCrossCloud):
     else:
         if ssh.env.get('SSH_DETACH'):
             if ssh.env.get('SSH_SCRIPT'):
+                # TODO: message d'error si duplicate
                 multiplex_command = ssh_command + " -t 'tmux has-session -t " + ssh.env['INSTANCE_NAME'] \
                                     + " || tmux new-session -s " + ssh.env['INSTANCE_NAME'] + " -d" \
                                     + ' "' + ssh.env['SSH_SCRIPT'] + '"' + "'"
