@@ -41,7 +41,6 @@ class ProviderSpecific(ABC):
         """
         pass
 
-    # TODO: to be integrated
     def create_local_rsa_key_pair(self):
         logging.info("Creating key pair")
 
@@ -55,7 +54,8 @@ class ProviderSpecific(ABC):
             if os.path.isfile(str(Path.home()) + "/.ssh" + self.ssh.env["USERNAME"] + ".pub"):
                 logging.info("Key pair already stored")
             else:
-                logging.info("Creating key pair from existing key in " + str(Path.home()) + "/.ssh" + self.ssh.env["USERNAME"])
+                logging.info(
+                    "Creating key pair from existing key in " + str(Path.home()) + "/.ssh" + self.ssh.env["USERNAME"])
                 os.system(pub_from_priv)
         else:
             os.system(genrate_key_pair)
@@ -69,6 +69,7 @@ class ProviderSpecific(ABC):
 class SpecificAWS(ProviderSpecific):
     def __init__(self, ssh):
         self.ssh = ssh
+        self._init_rsa_key_pair()
         self._init_size()
         self._init_image()
         self._init_security_group()
@@ -101,17 +102,17 @@ class SpecificAWS(ProviderSpecific):
 
         if os.path.isfile(str(Path.home()) + "/.ssh" + self.ssh.env['USERNAME']):
             if self.ssh.env['USERNAME'] in self.ssh.driver.ex_list_keypairs():
-                logging.info("Key pair already stored, ignoring step")
+                logging.info("Key pair already stored")
             else:
                 logging.info(
-                    "Creating key pair from existing key in " + str(Path.home()) + "/.ssh" + self.ssh.env['USERNAME'])
+                    "Creating key pair from existing key in " + str(Path.home()) + "/.ssh" + self.ssh.env[
+                        'USERNAME'])
                 self.ssh.driver.import_key_pair_from_file(name=self.ssh.env['USERNAME'],
                                                           key_file_path=str(Path.home())
                                                                         + "/.ssh" + self.ssh.env['USERNAME'])
         else:
             keypair = self.ssh.driver.create_key_pair(name=self.ssh.env['USERNAME'])
             rsa_key = keypair.get('KeyMaterial')
-
             with open(str(Path.home()) + "/.ssh/" + self.ssh.env['USERNAME'], 'w') as file:
                 file.write(rsa_key)
             os.chmod(str(Path.home()) + "/.ssh/" + self.ssh.env['USERNAME'], stat.S_IRWXU)
@@ -158,6 +159,7 @@ class SpecificAWS(ProviderSpecific):
 class SpecificAzure(ProviderSpecific):
     def __init__(self, ssh):
         self.ssh = ssh
+        self._init_rsa_key_pair()
         self._init_location()
         self._init_size()
         self._init_image()
@@ -291,6 +293,7 @@ class SpecificAzure(ProviderSpecific):
 class SpecificGPC(ProviderSpecific):
     def __init__(self, ssh):
         self.ssh = ssh
+        self._init_rsa_key_pair()
         self._init_image()
         self._init_size()
         self._init_metadata()
