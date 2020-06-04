@@ -1,8 +1,7 @@
-import getpass as gt
 import subprocess
 import time
 import logging
-from pathlib import Path
+import coloredlogs
 from sshcrosscloud.ssh_cross_cloud import SSHCrossCloud
 import os
 import sys
@@ -16,8 +15,6 @@ SSH-CROSS-CLOUD
 
 """
 
-# TODO: remplir les "help"
-# TODO: couleurs pour les logs
 parser = ArgumentParser()
 
 # SSH PARAMETERS
@@ -83,9 +80,6 @@ def main():
 
     if args.provider:
         arg_provider(pre_env, args.provider)
-    else:
-        logging.warning("You must chose a provider (aws, azure or gcp)")
-        sys.exit(0)
 
     if args.L:
         arg_L(pre_env, args.L)
@@ -114,24 +108,14 @@ def main():
     """-----------------Here call methods---------------------"""
     logging.info('-----SSH CROSS CLOUD-----')
 
-    # Credentials
-    if pre_env.get('CONFIG'):
-        utils.set_credentials(pre_env['PROVIDER'])
-
     # SSH Object
     ssh = SSHCrossCloud(pre_env, arg_dict)
-
-    # Auto config
-    if pre_env.get('CONFIG'):
-        provider_config(ssh)
 
     # Specific Driver
     spe_driver = get_provider_specific_driver(ssh)
 
-    # TODO: gérer les différents displays
-    # display_aws_instance_characteristics(ssh)
-
     # If no instance found, create one
+    # TODO: make a def ?
     if not ssh.env.get("INSTANCE_ID"):
         if wait_for_public_ip(ssh, spe_driver.create_instance()) != 0:
             raise Exception("Could not create instance")
@@ -140,7 +124,7 @@ def main():
     elif ssh.env.get("INSTANCE_STATE") == "stopped":
         if start_instance(ssh) != 0:
             raise Exception("Could not start instance")
-        wait_for_public_ip(ssh, get_node(ssh))
+        wait_for_public_ip(ssh, spe_driver.get_node())
 
     # Try to connect multiple times to the instance to check the connection
     connection_result = wait_until_initialization(ssh)
@@ -164,24 +148,6 @@ def main():
     return 0
 
 
-def provider_config(ssh: SSHCrossCloud):
-    if os.path.isfile(str(Path.home()) + "/.ssh" + ssh.env['USERNAME']):
-        # AWS
-        if ssh.env['PROVIDER'] == 'AWS':
-            if ssh.env['USERNAME'] in ssh.driver.ex_list_keypairs():
-                logging.info("Key pair already stored, ignoring step")
-            else:
-                utils.create_local_rsa_key_pair(ssh.env['USERNAME'])
-        # Other Providers
-        else:
-            if os.path.isfile(str(Path.home()) + "/.ssh" + ssh.env['USERNAME'] + ".pub"):
-                logging.info("Key pairs already stored, ignoring step")
-            else:
-                utils.create_local_rsa_key_pair(ssh.env['USERNAME'])
-    else:
-        utils.create_local_rsa_key_pair(ssh.env['USERNAME'])
-
-
 def guide_credentials(provider: str):
     if provider == 'AWS':
         guide = utils.guide_aws
@@ -193,16 +159,6 @@ def guide_credentials(provider: str):
         guide = "No guide for this provider"
 
     logging.info(guide)
-
-
-def display_aws_instance_characteristics(ssh: SSHCrossCloud):
-    logging.info("----------------------------------------------------------")
-    logging.info("Provider: " + ssh.env['PROVIDER'])
-    logging.info("Instance Name: " + ssh.env['INSTANCE_NAME'])
-    logging.info("Region: " + ssh.env['REGION'])
-    logging.info("Type: " + ssh.env['INSTANCE_TYPE'])
-    logging.info("Image Id: " + ssh.env['IMAGE_ID'])
-    logging.info("----------------------------------------------------------")
 
 
 # Arguments methods
@@ -244,9 +200,10 @@ def arg_config(pre_env):
 
 
 def arg_destroy(pre_env):
-    ssh = SSHCrossCloud(pre_env, arg_dict)
-    terminate_instance(ssh)
-    sys.exit(0)
+    pre_env["NO_RSYNC_BEGIN"] = "y"
+    pre_env["NO_RSYNC_END"] = "y"
+    pre_env["NO_ATTACH"] = "y"
+    pre_env["FINAL_STATE"] = "terminate"
 
 
 def arg_provider(pre_env, arg: str):
@@ -277,6 +234,7 @@ def arg_i(pre_env, arg):
 
 def arg_v():
     logging.getLogger().setLevel(logging.INFO)
+    coloredlogs.install(level='INFO')
 
 
 def arg_no_rsync(pre_env):
@@ -289,16 +247,7 @@ def arg_verbose(pre_env):
 
 
 def arg_help():
-    help_text = """
-    Launch instance, connects to it and leave it alive                          sshcrosscloud.py
-    Launch instance, connects to it and stops it (state is saved)	            sshcrosscloud.py --stop
-    Launch instance, connects to it and leave it alive           	            sshcrosscloud.py --leave
-    Launch instance, launch your command on tmux session         	            sshcrosscloud.py --detach --multiplex "<some command>" 
-    Launch instance, connects on a tmux session 	                            sshcrosscloud.py --detach
-    Launch instance, connects on a tmux session and attach to it                sshcrosscloud.py --attach
-    Synchronize instance directory to local and destroy instance              	sshcrosscloud.py --finish
-    Force destruction of the instance    	                                    sshcrosscloud.py --destroy
-    """
+    help_text = utils.help_text
     logging.info(help_text)
     sys.exit(0)
 
@@ -309,7 +258,6 @@ def arg_status(pre_env):
     sys.exit(0)
 
 
-# Other Methods
 def display_instances(ssh: SSHCrossCloud):
     if ssh.env['PROVIDER'] == "AZURE":
         nodes = ssh.driver.list_nodes(ssh.env['AZ_RESOURCE_GROUP'])
@@ -325,17 +273,6 @@ def display_instances(ssh: SSHCrossCloud):
         logging.info(node)
 
     logging.info("------------------------------------------------------")
-
-
-def get_node(ssh: SSHCrossCloud):
-    if ssh.env['PROVIDER'] == "AZURE":
-        nodes = ssh.driver.list_nodes(ssh.env['AZ_RESOURCE_GROUP'])
-    else:
-        nodes = ssh.driver.list_nodes()
-    if ssh.env.get('INSTANCE_ID'):
-        for node in nodes:
-            if node.id == ssh.env['INSTANCE_ID']:
-                return node
 
 
 def wait_until_initialization(ssh: SSHCrossCloud):
@@ -363,6 +300,7 @@ def wait_until_initialization(ssh: SSHCrossCloud):
                              ssh.env['PUBLIC_IP'] + " exit && echo $?"
 
             output_test = subprocess.check_output(ssh_return, shell=True)
+            # TODO: raise exception if output not good
             logging.info("Instance is available")
 
             return 0
@@ -373,8 +311,7 @@ def wait_until_initialization(ssh: SSHCrossCloud):
         time.sleep(5)
         i += 1
 
-    logging.warning("Could not connect to instance, please try later")
-    sys.exit(1)
+    raise Exception("Could not connect to instance, please try later")
 
 
 def wait_for_public_ip(ssh: SSHCrossCloud, node):
@@ -405,53 +342,55 @@ def attach_to_instance(ssh: SSHCrossCloud):
     :param ssh:
     :return: 0 if SSH connection succeeded, 1 if not
     """
+    if not ssh.env['NO_ATTACH']:
 
-    ssh_params = ""
-    if ssh.env.get('SSH_PARAMS'):
-        ssh_params = ssh.env['SSH_PARAMS']
-    if ssh.env.get('DEBUG'):
-        ssh_params = ssh_params + " -v"
+        ssh_params = ""
 
-    ssh_command = "ssh " + ssh.env['DISABLE_HOST_CHECKING'] + ssh_params + " " + ssh.env['PEM_SSH'] + " " \
-                  + ssh.env['INSTANCE_USER'] + "@" + ssh.env['PUBLIC_IP'] + " "
+        if ssh.env.get('SSH_PARAMS'):
+            ssh_params = ssh.env['SSH_PARAMS']
+        if ssh.env.get('DEBUG'):
+            ssh_params = ssh_params + " -v"
 
-    if not ssh.env.get('MULTIPLEX'):
-        if ssh.env.get('SSH_SCRIPT'):
-            logging.info("ssh script : " + ssh_command + ssh.env['SSH_SCRIPT'])
-            os.system(ssh_command + ssh.env['SSH_SCRIPT'])
+        ssh_command = "ssh " + ssh.env['DISABLE_HOST_CHECKING'] + ssh_params + " " + ssh.env['PEM_SSH'] + " " \
+                      + ssh.env['INSTANCE_USER'] + "@" + ssh.env['PUBLIC_IP'] + " "
+
+        if not ssh.env.get('MULTIPLEX'):
+            if ssh.env.get('SSH_SCRIPT'):
+                logging.info("ssh script : " + ssh_command + ssh.env['SSH_SCRIPT'])
+                os.system(ssh_command + ssh.env['SSH_SCRIPT'])
+            else:
+                logging.info("no ssh script : " + ssh_command)
+                os.system(ssh_command)
+            return 0
         else:
-            logging.info("no ssh script : " + ssh_command)
-            os.system(ssh_command)
-        return 0
-    else:
-        if ssh.env.get('SSH_DETACH'):
-            if ssh.env.get('SSH_SCRIPT'):
-                multiplex_command = ssh_command + " -t 'tmux has-session -t " + ssh.env['INSTANCE_NAME'] \
-                                    + " || tmux new-session -s " + ssh.env['INSTANCE_NAME'] + " -d" \
-                                    + ' "' + ssh.env['SSH_SCRIPT'] + '"' + "'"
-            else:
-                multiplex_command = ssh_command + " -t 'tmux has-session -t " + ssh.env['INSTANCE_NAME'] \
-                                    + " || tmux new-session -s " + ssh.env['INSTANCE_NAME'] + " -d'"
+            if ssh.env.get('SSH_DETACH'):
+                if ssh.env.get('SSH_SCRIPT'):
+                    multiplex_command = ssh_command + " -t 'tmux has-session -t " + ssh.env['INSTANCE_NAME'] \
+                                        + " || tmux new-session -s " + ssh.env['INSTANCE_NAME'] + " -d" \
+                                        + ' "' + ssh.env['SSH_SCRIPT'] + '"' + "'"
+                else:
+                    multiplex_command = ssh_command + " -t 'tmux has-session -t " + ssh.env['INSTANCE_NAME'] \
+                                        + " || tmux new-session -s " + ssh.env['INSTANCE_NAME'] + " -d'"
 
-            logging.info("--detach : " + multiplex_command)
-            os.system(multiplex_command)
+                logging.info("--detach : " + multiplex_command)
+                os.system(multiplex_command)
 
-            return 0
+                return 0
 
-        elif ssh.env.get('SSH_ATTACH'):
-            # ssh arg "-t" forces to allocate a terminal, does not not otherwise
-            if ssh.env.get('SSH_SCRIPT'):
-                multiplex_command = ssh_command + " -t 'tmux attach-session -t " + ssh.env['INSTANCE_NAME'] \
-                                    + " || tmux new-session -s " + ssh.env['INSTANCE_NAME'] \
-                                    + ' "' + ssh.env['SSH_SCRIPT'] + '"' + "'"
-            else:
-                multiplex_command = ssh_command + " -t 'tmux attach-session -t " + ssh.env['INSTANCE_NAME'] \
-                                    + " || tmux new-session -s " + ssh.env['INSTANCE_NAME'] + "'"
+            elif ssh.env.get('SSH_ATTACH'):
+                # ssh arg "-t" forces to allocate a terminal, does not not otherwise
+                if ssh.env.get('SSH_SCRIPT'):
+                    multiplex_command = ssh_command + " -t 'tmux attach-session -t " + ssh.env['INSTANCE_NAME'] \
+                                        + " || tmux new-session -s " + ssh.env['INSTANCE_NAME'] \
+                                        + ' "' + ssh.env['SSH_SCRIPT'] + '"' + "'"
+                else:
+                    multiplex_command = ssh_command + " -t 'tmux attach-session -t " + ssh.env['INSTANCE_NAME'] \
+                                        + " || tmux new-session -s " + ssh.env['INSTANCE_NAME'] + "'"
 
-            logging.info("--attach : " + multiplex_command)
-            os.system(multiplex_command)
+                logging.info("--attach : " + multiplex_command)
+                os.system(multiplex_command)
 
-            return 0
+                return 0
 
 
 def finish_action(ssh: SSHCrossCloud):

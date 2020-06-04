@@ -10,54 +10,37 @@ from libcloud.compute.providers import get_driver
 from libcloud.compute.types import Provider
 import logging
 
+from sshcrosscloud import utils
 from sshcrosscloud.utils import get_string_from_file
 
-_global_dict = {
-    'DISABLE_HOST_CHECKING': "-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o LogLevel=quiet",
-    'FINAL_STATE': 'terminate'
-}
+"""
+SSHCrossCloud Class
 
-_aws_default_dict = {
-    'REGION': "eu-central-1",
-    'INSTANCE_TYPE': "t2.micro",
-    'USER_DATA': "",
-    'SECURITY_GROUP': "sshcrosscloud",
-    'IMAGE_ID': "ami-0e342d72b12109f91",
-    'IMAGE_NAME': "ubuntu"
-}
-
-_azure_default_dict = {
-    'REGION': "westus",
-    'INSTANCE_TYPE': "Standard_B1ls",
-    'IMAGE_NAME': "ubuntu",
-    'USER_DATA': "",
-    'IMAGE_ID': "UbuntuServer:16.04",
-    'AZ_RESOURCE_GROUP': "NetworkWatcherRG",
-    'AZ_PUBLISHER': "Canonical",
-}
-
-_gcp_default_dict = {
-    'REGION': "us-central1-a",
-    'INSTANCE_TYPE': "f1-micro",
-    'IMAGE_NAME': "ubuntu",
-    'USER_DATA': "",
-}
+Basically contains all the attributes to create an instance on multiple providers and a Libcloud Driver
+"""
 
 
 class SSHCrossCloud:
     nbOfSshConnections = 0
 
-    def __init__(self, pre_env, param_list: dict):
-        # Check that the parameters have only one action and one final state
-        self._check_parameters(param_list)
+    def __init__(self, pre_env, param_dict: dict):
+        # Init variables
+        self.pre_env = pre_env
+        self.param_dict = param_dict
+        self.default_dict = utils.global_dict
 
-        # By default is default
-        self.default_dict = _global_dict
-        self._init_env(pre_env)
+        # Check that the parameters have only one action and one final state
+        self._check_parameters()
+
+        # dotenv values are taken form .env file
+        self._init_env(dotenv_values(find_dotenv()), os.environ)
         self._init_variables()
 
         # Credentials and provider specifics
         self._init_provider_specifics()
+
+        # Credentials
+        self._init_credentials_path()
 
         # Driver can be instantiated only after getting credentials
         self._init_driver()
@@ -65,69 +48,34 @@ class SSHCrossCloud:
         # These variables can only be set after the driver set
         self._init_instance_attributes_from_name()
 
-    def _init_env(self, pre_env):
+    def _init_env(self, dotenv, environ):
         """
         A la fin de la fonction, env possède les valeurs mélangées de
         default, puis .env, puis environ.
         """
-        if pre_env['PROVIDER'] == 'AWS':
-            self.default_dict.update(_aws_default_dict)
-        elif pre_env['PROVIDER'] == 'AZURE':
-            self.default_dict.update(_azure_default_dict)
-        elif pre_env['PROVIDER'] == 'GCP':
-            self.default_dict.update(_gcp_default_dict)
+        if self.pre_env['PROVIDER'] == 'AWS':
+            self.default_dict.update(utils.aws_default_dict)
+        elif self.pre_env['PROVIDER'] == 'AZURE':
+            self.default_dict.update(utils.azure_default_dict)
+        elif self.pre_env['PROVIDER'] == 'GCP':
+            self.default_dict.update(utils.gcp_default_dict)
         else:
-            logging.warning("Provider not supported")
-            return 1
-        # dotenv values are taken form .env file
-        dotenv = dotenv_values(find_dotenv())
-        self.env = self.create_context(self.default_dict, dotenv, os.environ)
+            raise Exception(logging.warning("Provider not supported"))
 
-    def get_instance_user(self):
-        if self.env['PROVIDER'] == "AWS":
-            default_user_list = {
-                'Amazon Linux': 'ec2-user',
-                'ubuntu': 'ubuntu',
-                'RHEL 6.[0-3]': 'root',
-                'RHEL 6.[0-9]+': 'ec2-user',
-                'Fedora': 'fedora',
-                'Centos': 'centos',
-                'SUSE': 'ec2-user',
-                'BitNami': 'bitnami',
-                'TurnKey': 'root',
-                'NanoStack': 'ubuntu',
-                'FreeBSD': 'ec2-user',
-                'OmniOS': 'root',
-            }
-            for i, j in default_user_list.items():
-                if i.lower() in self.env['IMAGE_NAME'].lower():
-                    return j
-        if self.env['PROVIDER'] == "AZURE":
-            return "azure"
-        if self.env['PROVIDER'] == "GCP":
-            return getpass.getuser()
+        # Default
+        env = self.default_dict.copy()
 
-    # Initialization methods
-    def create_context(self, defaultenv, dotenv, basenv):
-        """
-
-        :param defaultenv:
-        :param dotenv:
-        :param basenv:
-        :return:
-        """
-        env = defaultenv.copy()
-
+        # Dotenv
         for k, v in dotenv.items():
             env[k] = v
 
-        for k, v in basenv.items():
+        # OS Environ
+        for k, v in environ.items():
             env[k] = v
 
-        return env
+        self.env = env
 
-    def _init_variables(
-            self):  # En faire une vrai méthode (avec un self en premier paramètre), soit en faire un function, qui recoit en env en paramètre.
+    def _init_variables(self):
         """
         A la fin de la fonction, env possède le maximum de variables d'environement
         calculés, pour ne plus avoir à gérer les erreurs ou les valeurs par défaut.
@@ -144,8 +92,6 @@ class SSHCrossCloud:
             self.env['INSTANCE_NAME'] = self.env['AWS_KEY_NAME'].lower() + "-" + self.env['PROJECT_NAME']
         if not self.env.get('AWS_RSYNC_DIR'):
             self.env['AWS_RSYNC_DIR'] = os.getcwd()
-        if not self.env.get("REGION"):
-            self.env["REGION"] = get_region()
         if not self.env.get('PEM_SSH'):
             self.env['PEM_SSH'] = "-i " + str(Path.home()) + "/.ssh/" + self.env['USERNAME']
 
@@ -155,7 +101,7 @@ class SSHCrossCloud:
 
         self.env['OS_NAME'] = os.name
         self.env['USER_DATA'] = get_string_from_file(".user_data")
-        self.env['INSTANCE_USER'] = self.get_instance_user()
+        self.env['INSTANCE_USER'] = get_instance_user(self.env['PROVIDER'])
 
         tags = {
             'Name': self.env['INSTANCE_NAME'],
@@ -168,30 +114,43 @@ class SSHCrossCloud:
 
     def _init_provider_specifics(self):
         if self.env['PROVIDER'] == "AWS":
-            self.env['AWS_ACCESS_KEY_ID'], self.env['AWS_SECRET_ACCESS_KEY'] = get_aws_credentials(self)
+            if not self.env.get("REGION"):
+                self.env["REGION"] = get_aws_region(self.env['AWS_FILE_PATH'])
+            self.env['AWS_ACCESS_KEY_ID'], self.env['AWS_SECRET_ACCESS_KEY'] = get_credentials(
+                self.env['AWS_FILE_PATH'], self.env['PROVIDER'])
+
         elif self.env['PROVIDER'] == "AZURE":
+            if not self.env.get("REGION"):
+                raise Exception("No region found, you must specify a region in .env file")
             self.env['AZURE_TENANT_ID'], self.env['AZURE_SUBSCRIPTION_ID'], self.env['AZURE_APPLICATION_ID'], self.env[
-                'AZURE_SECRET'] = get_azure_credentials(self)
+                'AZURE_SECRET'] = get_credentials(
+                self.env['AZURE_FILE_PATH'], self.env['PROVIDER'])
             if not self.env.get("AZ_PUBLIC_IP_NAME"):
                 self.env['AZ_PUBLIC_IP_NAME'] = "sshcrosscloud-ip-" + self.env['USERNAME']
             if not self.env.get("AZ_VIRTUAL_NETWORK"):
                 self.env['AZ_VIRTUAL_NETWORK'] = "sshcrosscloud-vn-" + self.env['USERNAME']
             if not self.env.get("AZ_SUBNET"):
                 self.env['AZ_SUBNET'] = "sshcrosscloud-sn-" + self.env['USERNAME']
+
         elif self.env['PROVIDER'] == "GCP":
+            if not self.env.get("REGION"):
+                raise Exception("No region found, you must specify a region in .env file")
             self.env['GCP_USER_ID'], self.env['GCP_KEY_PATH'], self.env['GCP_PROJECT'], self.env[
-                'GCP_DATA_CENTER'] = get_gcp_credentials(self)
+                'GCP_DATA_CENTER'] = get_credentials(
+
+                self.env['GCP_FILE_PATH'], self.env['PROVIDER'])
         else:
             logging.info("Provider not supported")
 
-    def _check_parameters(self, param_list):
-        list_final_state = (param_list['leave'], param_list['stop'], param_list['terminate'])
+    def _check_parameters(self):
+        if not self.param_dict.get('provider'):
+            raise Exception("You must chose a provider (aws, azure or gcp)")
+        list_final_state = (self.param_dict['leave'], self.param_dict['stop'], self.param_dict['terminate'])
         if sum(list_final_state) > 1:
             raise Exception("Can't have multiple final states")
-        list_actions = (param_list['detach'], param_list['attach'], param_list['finish'])
+        list_actions = (self.param_dict['detach'], self.param_dict['attach'], self.param_dict['finish'])
         if sum(list_actions) > 1:
             raise Exception("Can't have multiple actions")
-        return 0
 
     def _init_instance_attributes_from_name(self):
         if self.env['PROVIDER'] == "AZURE":
@@ -215,12 +174,6 @@ class SSHCrossCloud:
         """
         try:
             if self.env["PROVIDER"] == "AWS":
-                # TODO base config driver, EC2config en hérite
-                # creer une classe ConfigDriver (base des config drivers)
-                # creer une classe Ec2configdriver qui hérite de ConfigDriver + azure etc
-                # creer une fonction get_config_driver qui recoit comme param un provider, et un provider classique
-                # getprovider et getconfigprovider ont le meme param
-                #
                 cls = get_driver(Provider.EC2)
                 provider_driver = cls(self.env["AWS_ACCESS_KEY_ID"],
                                       self.env["AWS_SECRET_ACCESS_KEY"],
@@ -247,72 +200,171 @@ class SSHCrossCloud:
         except:
             raise Exception("Could not get driver")
 
+    def _init_credentials_path(self):
+        """
+        Creates credentials
+        :param self:
+        :return: the path of the file where the credentials are stored
+        """
+        # TODO: GCP has another method for credentials, what to do ?
+        if self.env.get('CONFIG'):
+            default_credentials_path = self.env['PROVIDER_FILE_PATH']
+            if os.path.isfile(default_credentials_path):
+                with open(default_credentials_path, 'r+') as file:
+                    file_data = file.read()
+                    if file_data:
+                        logging.info("Credentials have already been saved, would you like to change them? y/n")
+                        answer = input()
+                        if answer == 'y':
+                            pass
+                        else:
+                            logging.info("Credentials have not been changed")
+                            self.env['PROVIDER_FILE_PATH'] = default_credentials_path
+                write_credentials(default_credentials_path, self.pre_env['PROVIDER'])
+                self.env['PROVIDER_FILE_PATH'] = default_credentials_path
+            else:
+                logging.warning("AWS Credentials file does not exist, create one (1) "
+                                "or give path to another credential file (2) ? ")
+                answer = input()
+                if answer == '1':
+                    write_credentials(default_credentials_path, self.pre_env['PROVIDER'])
+                    self.env['PROVIDER_FILE_PATH'] = default_credentials_path
+                elif answer == '2':
+                    logging.info("Enter the path to your credentials file: (ex :/path/to/your/file/.aws)")
+                    custom_credentials_path = input()
+                    write_credentials(custom_credentials_path, self.pre_env['PROVIDER'])
+                    self.env['PROVIDER_FILE_PATH'] = custom_credentials_path
+                else:
+                    raise Exception("You need a credentials file to create an instance")
 
-def get_aws_credentials(ssh: SSHCrossCloud):
-    if os.path.isfile(str(Path.home()) + "/.aws/credentials"):
+
+def get_instance_user(provider: str):
+    if provider == "AWS":
+        default_user_list = utils.aws_default_user_list
+        for i, j in default_user_list.items():
+            if i.lower() in provider.lower():
+                return j
+    if provider == "AZURE":
+        return "azure"
+    if provider == "GCP":
+        return getpass.getuser()
+
+
+def get_aws_region(path: str):
+    if os.path.isfile(path):
 
         config = configparser.ConfigParser()
-        config.read(str(Path.home()) + "/.aws/credentials")
-        aws_access_key_id = config['default']['aws_access_key_id']
-        aws_secret_access_key = config['default']['aws_secret_access_key']
+        config.read(path)
+        aws_region = config['default']['region']
 
-        return aws_access_key_id, aws_secret_access_key
+        return aws_region
     else:
-        logging.warning("No credentials found in " + str(Path.home()) + "/.aws/credentials")
-        logging.info(
-            "Please run 'sshcrosscloud --config --provider " + ssh.env['PROVIDER'] + "' to configure credentials")
-        return 1
+        raise Exception("No region found in " + path + ", run sshcrosscloud --config -- provider aws")
 
 
-def get_azure_credentials(ssh: SSHCrossCloud):
-    if os.path.isfile(str(Path.home()) + "/.azure/credentials"):
+def get_credentials(path: str, provider: str):
+    if provider == 'AWS':
+        credentials_path = path + "/credentials"
+        if os.path.isfile(credentials_path):
 
-        config = configparser.ConfigParser()
-        config.read(str(Path.home()) + "/.azure/credentials")
-        tenant_id = config['default']['tenant']
-        subscription_id = config['default']['subscription_id']
-        client_id = config['default']['client_id']
-        secret = config['default']['secret']
+            config = configparser.ConfigParser()
+            config.read(credentials_path)
+            aws_access_key_id = config['default']['aws_access_key_id']
+            aws_secret_access_key = config['default']['aws_secret_access_key']
 
-        return tenant_id, subscription_id, client_id, secret
+            return aws_access_key_id, aws_secret_access_key
+        else:
+            raise Exception("No credentials found in " + credentials_path +
+                            ", run sshcrosscloud --config -- provider aws")
+
+    elif provider == 'AZURE':
+        credentials_path = path + "/credentials"
+        if os.path.isfile(credentials_path):
+
+            config = configparser.ConfigParser()
+            config.read(credentials_path)
+            tenant_id = config['default']['tenant']
+            subscription_id = config['default']['subscription_id']
+            client_id = config['default']['client_id']
+            secret = config['default']['secret']
+
+            return tenant_id, subscription_id, client_id, secret
+        else:
+            raise Exception("No credentials found in " + credentials_path + ", run sshcrosscloud --config -- provider azure")
+
+    elif provider == 'GCP':
+        # TODO: different methods : json https://cloud.google.com/docs/authentication/production?hl=fr#auth-cloud-explicit-python
+        credentials_path = path + "/credentials"
+        if os.path.isfile(credentials_path):
+
+            config = configparser.ConfigParser()
+            config.read(credentials_path)
+            user_id = config['default']['user_id']
+            key = config['default']['key']
+            project = config['default']['project']
+            datacenter = config['default']['datacenter']
+
+            return user_id, key, project, datacenter
+        else:
+            raise Exception("No credentials found in " + credentials_path + ", run sshcrosscloud --config -- provider gcp")
+
     else:
-        logging.warning("No credentials found in " + str(Path.home()) + "/.azure/credentials")
-        logging.info(
-            "Please run 'sshcrosscloud --config --provider " + ssh.env['PROVIDER'] + "' to configure credentials")
-        return 1
+        raise Exception("Provider not supported")
 
 
-def get_gcp_credentials(ssh: SSHCrossCloud):
-    if os.path.isfile(str(Path.home()) + "/.gcp/credentials"):
+def write_credentials(path: str, provider: str):
+    if provider == 'AWS':
+        with open(path, 'w') as cred_file:
+            logging.info("Enter AWS ACCESS KEY ID:")
+            aws_access_key_id = input()
+            logging.info("Enter AWS SECRET ACCESS ID:")
+            aws_secret_access_key = input()
+            logging.info("Enter REGION:")
+            aws_region = input()
 
-        config = configparser.ConfigParser()
-        config.read(str(Path.home()) + "/.gcp/credentials")
-        user_id = config['default']['user_id']
-        key = config['default']['key']
-        project = config['default']['project']
-        datacenter = config['default']['datacenter']
+            config = configparser.ConfigParser()
+            config['default'] = {'aws_access_key_id': aws_access_key_id,
+                                 'aws_secret_access_key': aws_secret_access_key,
+                                 'region': aws_region}
 
-        return user_id, key, project, datacenter
-    else:
-        logging.warning("No credentials found in " + str(Path.home()) + "/.gcp/credentials")
-        logging.info(
-            "Please run 'sshcrosscloud --config --provider " + ssh.env['PROVIDER'] + "' to configure credentials")
-        return 1
+            config.write(cred_file)
+            logging.info("Credentials have been saved")
 
+    elif provider == 'AZURE':
+        with open(path, 'w') as cred_file:
+            logging.info("Enter AZURE Tenant:")
+            tenant = input()
+            logging.info("Enter AZURE Subscription ID:")
+            subscription_id = input()
+            logging.info("Enter AZURE Client ID:")
+            client_id = input()
+            logging.info("Enter AZURE Secret:")
+            secret = input()
+            config = configparser.ConfigParser()
+            config['default'] = {'tenant': tenant,
+                                 'subscription_id': subscription_id,
+                                 'client_id': client_id,
+                                 'secret': secret}
 
-def get_azure_resource_group(ssh: SSHCrossCloud):
-    if not ssh.driver.ex_list_resource_groups():
-        logging.warning("No Resource Group found, you must create one")
-        logging.info("You can run 'az group create -l <REGION> -n <NAME>' or create one on https://portal.azure.com/")
-        return 1
-    else:
-        rg = ssh.driver.ex_list_resource_groups()[0]
-        return rg
+            config.write(cred_file)
+            logging.info("Credentials have been saved")
 
+    elif provider == 'GCP':
+        with open(path, 'w') as cred_file:
+            logging.info("Enter GCP User ID:")
+            user_id = input()
+            logging.info("Enter GCP Key ID:")
+            key = input()
+            logging.info("Enter GCP Project ID:")
+            project = input()
+            logging.info("Enter GCP Datacenter ID:")
+            datacenter = input()
 
-def get_region():
-    # TODO: s'occuper des autres providers
-    with open(str(Path.home()) + ".aws/config", 'r') as file:
-        data = file.read().replace('\n', '')
-        region = data.split("region = ", 1)[1]
-        return region
+            config = configparser.ConfigParser()
+            config['default'] = {'user_id': user_id,
+                                 'key': key,
+                                 'project': project,
+                                 'datacenter': datacenter}
+
+            config.write(cred_file)
+            logging.info("Credentials have been saved")

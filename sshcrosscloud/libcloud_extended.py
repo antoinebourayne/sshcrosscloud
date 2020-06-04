@@ -4,14 +4,15 @@ import sys
 import stat
 from abc import ABC, abstractmethod
 from pathlib import Path
-
-from sshcrosscloud import utils
 from sshcrosscloud.ssh_cross_cloud import SSHCrossCloud
 from libcloud.compute.base import NodeAuthSSHKey
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.hazmat.backends import default_backend
 from sshcrosscloud.utils import get_public_key
+
+"""
+ProviderSpecific Class
+
+This class is an upgrade of libcloud to simplify the use of SSH CROSS CLOUD
+"""
 
 
 class ProviderSpecific(ABC):
@@ -25,12 +26,44 @@ class ProviderSpecific(ABC):
         pass
 
     @abstractmethod
-    def create_rsa_key_pair(self):
+    def get_node(self):
         """
 
         :return:
         """
         pass
+
+    @abstractmethod
+    def _init_rsa_key_pair(self):
+        """
+
+        :return:
+        """
+        pass
+
+    # TODO: to be integrated
+    def create_local_rsa_key_pair(self):
+        logging.info("Creating key pair")
+
+        genrate_key_pair = "ssh-keygen -f " + str(Path.home()) + "/.ssh/" + self.ssh.env["USERNAME"]
+
+        pub_from_priv = "ssh-keygen -y -f " + str(Path.home()) + "/.ssh/" \
+                        + self.ssh.env["USERNAME"] + " > " + str(Path.home()) \
+                        + "/.ssh/" + self.ssh.env["USERNAME"] + ".pub"
+
+        if os.path.isfile(str(Path.home()) + "/.ssh" + self.ssh.env["USERNAME"]):
+            if os.path.isfile(str(Path.home()) + "/.ssh" + self.ssh.env["USERNAME"] + ".pub"):
+                logging.info("Key pair already stored")
+            else:
+                logging.info("Creating key pair from existing key in " + str(Path.home()) + "/.ssh" + self.ssh.env["USERNAME"])
+                os.system(pub_from_priv)
+        else:
+            os.system(genrate_key_pair)
+            os.chmod(str(Path.home()) + "/.ssh/" + self.ssh.env["USERNAME"], stat.S_IRWXU)
+
+        if os.path.isfile(str(Path.home()) + "/.ssh/" + self.ssh.env["USERNAME"] + ".pub"):
+            logging.info("Key pair created")
+            return 0
 
 
 class SpecificAWS(ProviderSpecific):
@@ -41,6 +74,7 @@ class SpecificAWS(ProviderSpecific):
         self._init_security_group()
 
     def create_instance(self):
+        logging.info("Instance parameters : " + self.ssh.env['INSTANCE_NAME'] + self.image + self.size)
         node = self.ssh.driver.create_node(name=self.ssh.env['INSTANCE_NAME'],
                                            image=self.image,  # Need to use Libcloud object, can't use string
                                            size=self.size,
@@ -50,16 +84,30 @@ class SpecificAWS(ProviderSpecific):
 
         return node
 
-    def create_rsa_key_pair(self):
-        # TODO: make this testable
+    def get_node(self):
+        nodes = self.ssh.driver.list_nodes()
+        if not nodes:
+            raise Exception("No instance found")
+        if self.ssh.env.get('INSTANCE_ID'):
+            for node in nodes:
+                if node.id == self.ssh.env['INSTANCE_ID']:
+                    return node
+            raise Exception("No instance found")
+        else:
+            raise Exception("No instance ID registered")
+
+    def _init_rsa_key_pair(self):
         logging.info("Creating key pair")
 
         if os.path.isfile(str(Path.home()) + "/.ssh" + self.ssh.env['USERNAME']):
-            logging.info(
-                "Creating key pair from existing key in " + str(Path.home()) + "/.ssh" + self.ssh.env['USERNAME'])
-            self.ssh.driver.import_key_pair_from_file(name=self.ssh.env['USERNAME'],
-                                                      key_file_path=str(Path.home())
-                                                                    + "/.ssh" + self.ssh.env['USERNAME'])
+            if self.ssh.env['USERNAME'] in self.ssh.driver.ex_list_keypairs():
+                logging.info("Key pair already stored, ignoring step")
+            else:
+                logging.info(
+                    "Creating key pair from existing key in " + str(Path.home()) + "/.ssh" + self.ssh.env['USERNAME'])
+                self.ssh.driver.import_key_pair_from_file(name=self.ssh.env['USERNAME'],
+                                                          key_file_path=str(Path.home())
+                                                                        + "/.ssh" + self.ssh.env['USERNAME'])
         else:
             keypair = self.ssh.driver.create_key_pair(name=self.ssh.env['USERNAME'])
             rsa_key = keypair.get('KeyMaterial')
@@ -68,7 +116,7 @@ class SpecificAWS(ProviderSpecific):
                 file.write(rsa_key)
             os.chmod(str(Path.home()) + "/.ssh/" + self.ssh.env['USERNAME'], stat.S_IRWXU)
 
-        logging.info("Key pair created")
+            logging.info("Key pair created")
 
     def _init_size(self):
         sizes = self.ssh.driver.list_sizes()
@@ -122,6 +170,7 @@ class SpecificAzure(ProviderSpecific):
 
     def create_instance(self):
         # Node Creation
+        logging.info("Instance parameters : " + self.ssh.env['INSTANCE_NAME'] + self.image + self.size)
         node = self.ssh.driver.create_node(name=self.ssh.env['INSTANCE_NAME'],
                                            image=self.image,
                                            size=self.size,
@@ -137,8 +186,20 @@ class SpecificAzure(ProviderSpecific):
 
         return node
 
-    def create_rsa_key_pair(self):
-        utils.create_local_rsa_key_pair(self.ssh.env['USERNAME'])
+    def get_node(self):
+        nodes = self.ssh.driver.list_nodes(self.ssh.env['AZ_RESOURCE_GROUP'])
+        if not nodes:
+            raise Exception("No instance found")
+        if self.ssh.env.get('INSTANCE_ID'):
+            for node in nodes:
+                if node.id == self.ssh.env['INSTANCE_ID']:
+                    return node
+            raise Exception("No instance found")
+        else:
+            raise Exception("No instance ID registered")
+
+    def _init_rsa_key_pair(self):
+        self.create_local_rsa_key_pair()
 
     def _init_size(self):
         sizes = self.ssh.driver.list_sizes(self.location)
@@ -235,6 +296,7 @@ class SpecificGPC(ProviderSpecific):
         self._init_metadata()
 
     def create_instance(self):
+        logging.info("Instance parameters : " + self.ssh.env['INSTANCE_NAME'] + self.image + self.size)
         node = self.ssh.driver.create_node(name=self.ssh.env['INSTANCE_NAME'],
                                            image=self.image,
                                            size=self.size,
@@ -242,8 +304,20 @@ class SpecificGPC(ProviderSpecific):
 
         return node
 
-    def create_rsa_key_pair(self):
-        utils.create_local_rsa_key_pair(self.ssh.env['USERNAME'])
+    def get_node(self):
+        nodes = self.ssh.driver.list_nodes()
+        if not nodes:
+            raise Exception("No instance found")
+        if self.ssh.env.get('INSTANCE_ID'):
+            for node in nodes:
+                if node.id == self.ssh.env['INSTANCE_ID']:
+                    return node
+            raise Exception("No instance found")
+        else:
+            raise Exception("No instance ID registered")
+
+    def _init_rsa_key_pair(self):
+        self.create_local_rsa_key_pair()
 
     def _init_size(self):
         sizes = self.ssh.driver.list_sizes()

@@ -1,11 +1,12 @@
-import configparser
-import logging
 import os
-import stat
 from pathlib import Path
 
-# TODO: stocker les chaines de caractères os.command ici
+# TODO: stocker les chaines de caractères os.command ici ?
 
+"""
+Here are implemented strings and functions used in more than one file
+
+"""
 
 guide_aws = """
 To configure AWS credentials, you must follow the instructions below:
@@ -54,6 +55,67 @@ az network vnet create --name <myVirtualNetwork> --resource-group <myResourceGro
 guide_gcp = """
 """
 
+help_text = """
+Launch instance, connects to it and leave it alive                          sshcrosscloud.py
+Launch instance, connects to it and stops it (state is saved)	            sshcrosscloud.py --stop
+Launch instance, connects to it and leave it alive           	            sshcrosscloud.py --leave
+Launch instance, launch your command on tmux session         	            sshcrosscloud.py --detach --multiplex "<some command>" 
+Launch instance, connects on a tmux session 	                            sshcrosscloud.py --detach
+Launch instance, connects on a tmux session and attach to it                sshcrosscloud.py --attach
+Synchronize instance directory to local and destroy instance              	sshcrosscloud.py --finish
+Force destruction of the instance    	                                    sshcrosscloud.py --destroy
+"""
+
+global_dict = {
+    'DISABLE_HOST_CHECKING': "-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o LogLevel=quiet",
+    'FINAL_STATE': 'terminate'
+}
+
+aws_default_dict = {
+    'REGION': "eu-central-1",
+    'INSTANCE_TYPE': "t2.micro",
+    'USER_DATA': "",
+    'SECURITY_GROUP': "sshcrosscloud",
+    'IMAGE_ID': "ami-0e342d72b12109f91",
+    'IMAGE_NAME': "ubuntu",
+    # TODO: update this value everywhere in the code where needed
+    'PROVIDER_FILE_PATH': str(Path.home()) + "/.aws/credentials",
+}
+
+azure_default_dict = {
+    'REGION': "westus",
+    'INSTANCE_TYPE': "Standard_B1ls",
+    'IMAGE_NAME': "ubuntu",
+    'USER_DATA': "",
+    'IMAGE_ID': "UbuntuServer:16.04",
+    'AZ_RESOURCE_GROUP': "NetworkWatcherRG",
+    'AZ_PUBLISHER': "Canonical",
+    'PROVIDER_FILE_PATH': str(Path.home()) + "/.azure/credentials"
+}
+
+gcp_default_dict = {
+    'REGION': "us-central1-a",
+    'INSTANCE_TYPE': "f1-micro",
+    'IMAGE_NAME': "ubuntu",
+    'USER_DATA': "",
+    'PROVIDER_FILE_PATH': str(Path.home()) + "/.gcp/credentials"
+}
+
+aws_default_user_list = {
+                'Amazon Linux': 'ec2-user',
+                'ubuntu': 'ubuntu',
+                'RHEL 6.[0-3]': 'root',
+                'RHEL 6.[0-9]+': 'ec2-user',
+                'Fedora': 'fedora',
+                'Centos': 'centos',
+                'SUSE': 'ec2-user',
+                'BitNami': 'bitnami',
+                'TurnKey': 'root',
+                'NanoStack': 'ubuntu',
+                'FreeBSD': 'ec2-user',
+                'OmniOS': 'root',
+            }
+
 
 def get_string_from_file(filepath):
     with open(filepath, 'r') as userdatafile:
@@ -67,61 +129,3 @@ def get_public_key(name: str) -> str:
         return rsa_pub
     else:
         raise Exception(str(Path.home()) + "/.ssh/" + name + ".pub " + "not found, add --config to create one")
-
-
-# Cannot be an SSHCrossCloud Method because called before creation of object
-def set_credentials(provider: str):
-    # TODO: do the other provider
-    if provider == 'AWS':
-        if os.path.isfile(str(Path.home()) + "/.aws/credentials"):
-            with open(str(Path.home()) + "/.aws/credentials", 'r+') as file:
-                file_data = file.read()
-                if file_data:
-                    logging.info("Credentials have already been saved, would you like to change them? y/n")
-                    answer = input()
-                    if answer == 'y':
-                        pass
-                    else:
-                        logging.info("Credentials have not been changed")
-                        return 0
-            with open(str(Path.home()) + "/.aws/credentials", 'w') as cred_file:
-
-                logging.info("Enter AWS ACCESS KEY ID:")
-                aws_access_key_id = input()
-                logging.info("Enter AWS SECRET ACCESS ID:")
-                aws_secret_access_key = input()
-
-                config = configparser.ConfigParser()
-                config['DEFAULT'] = {'aws_access_key_id': aws_access_key_id,
-                                     'aws_secret_access_key': aws_secret_access_key}
-
-                config.write(cred_file)
-                logging.info("Credentials have been saved")
-                return 0
-        else:
-            logging.warning("AWS Credentials file does not exist")
-            return 1
-    else:
-        logging.warning("Set credentials not yet implemented for this provider")
-
-
-def create_local_rsa_key_pair(name: str):
-    # TODO: make it testable
-    logging.info("Creating key pair")
-
-    genrate_key_pair = "ssh-keygen -f " + str(Path.home()) + "/.ssh/" + name
-
-    pub_from_priv = "ssh-keygen -y -f " + str(Path.home()) + "/.ssh/" \
-                    + name + " > " + str(Path.home()) \
-                    + "/.ssh/" + name + ".pub"
-
-    if os.path.isfile(str(Path.home()) + "/.ssh" + name):
-        logging.info("Creating key pair from existing key in " + str(Path.home()) + "/.ssh" + name)
-        os.system(pub_from_priv)
-    else:
-        os.system(genrate_key_pair)
-        os.chmod(str(Path.home()) + "/.ssh/" + name, stat.S_IRWXU)
-
-    if os.path.isfile(str(Path.home()) + "/.ssh/" + name + ".pub"):
-        logging.info("Key pair created")
-        return 0
