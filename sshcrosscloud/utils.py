@@ -1,7 +1,7 @@
+import logging
 import os
 from pathlib import Path
-
-# TODO: stocker les chaines de caractères os.command ici ?
+import coloredlogs
 
 """
 Here are implemented strings and functions used in more than one file
@@ -66,55 +66,187 @@ Synchronize instance directory to local and destroy instance              	sshcr
 Force destruction of the instance    	                                    sshcrosscloud.py --destroy
 """
 
-global_dict = {
-    'DISABLE_HOST_CHECKING': "-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o LogLevel=quiet",
-    'FINAL_STATE': 'terminate'
-}
 
-aws_default_dict = {
-    'REGION': "eu-central-1",
-    'INSTANCE_TYPE': "t2.micro",
-    'USER_DATA': "",
-    'SECURITY_GROUP': "sshcrosscloud",
-    'IMAGE_ID': "ami-0e342d72b12109f91",
-    'IMAGE_NAME': "ubuntu",
-    # TODO: update this value everywhere in the code where needed
-    'PROVIDER_FILE_PATH': str(Path.home()) + "/.aws/credentials",
-}
+class AWS:
+    pass
 
-azure_default_dict = {
-    'REGION': "westus",
-    'INSTANCE_TYPE': "Standard_B1ls",
-    'IMAGE_NAME': "ubuntu",
-    'USER_DATA': "",
-    'IMAGE_ID': "UbuntuServer:16.04",
-    'AZ_RESOURCE_GROUP': "NetworkWatcherRG",
-    'AZ_PUBLISHER': "Canonical",
-    'PROVIDER_FILE_PATH': str(Path.home()) + "/.azure/credentials"
-}
 
-gcp_default_dict = {
-    'REGION': "us-central1-a",
-    'INSTANCE_TYPE': "f1-micro",
-    'IMAGE_NAME': "ubuntu",
-    'USER_DATA': "",
-    'PROVIDER_FILE_PATH': str(Path.home()) + "/.gcp/credentials"
-}
+class Azure:
+    pass
 
-aws_default_user_list = {
-                'Amazon Linux': 'ec2-user',
-                'ubuntu': 'ubuntu',
-                'RHEL 6.[0-3]': 'root',
-                'RHEL 6.[0-9]+': 'ec2-user',
-                'Fedora': 'fedora',
-                'Centos': 'centos',
-                'SUSE': 'ec2-user',
-                'BitNami': 'bitnami',
-                'TurnKey': 'root',
-                'NanoStack': 'ubuntu',
-                'FreeBSD': 'ec2-user',
-                'OmniOS': 'root',
-            }
+
+class GCP:
+    pass
+
+
+class SSHVar:
+    def __init__(self, arg_dict: dict):
+
+        self.arg_dict = arg_dict
+
+        # Fonctional Variables
+        self.ssh_script = None
+        self.polygram = None
+        self.username = None
+        self.provider = None
+        self.ssh_params = None
+        self.pem_ssh = None
+        self.provider_dict = None
+        self.ssh_detach = False
+        self.ssh_attach = False
+        self.multiplex = False
+        self.no_rsync_begin = False
+        self.no_rsync_end = False
+        self.no_attach = False
+        self.no_wait_until_init = False
+        self.config = False
+        self.rsync_verbose = False
+        self.debug = False
+        self.instance_name = None
+        self.instance_id = None
+        self.instance_state = None
+        self.public_ip = None
+        self.user_data = None
+        self.instance_user = None
+        self.credentials_file_path = None
+        self.instance_spec_arg = None
+        self.status_mode = False
+        self.credentials_items = []
+        self.final_state = "terminate"
+        self.ssh_default_params = "-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o LogLevel=quiet"
+        self.nbOfSshConnections = 0
+
+        # AWS Object
+        self.aws = AWS
+        self.aws.access_key_id = None
+        self.aws.secret_access_key = None
+        self.aws.default_user_list = {
+            'Amazon Linux': 'ec2-user',
+            'ubuntu': 'ubuntu',
+            'RHEL 6.[0-3]': 'root',
+            'RHEL 6.[0-9]+': 'ec2-user',
+            'Fedora': 'fedora',
+            'Centos': 'centos',
+            'SUSE': 'ec2-user',
+            'BitNami': 'bitnami',
+            'TurnKey': 'root',
+            'NanoStack': 'ubuntu',
+            'FreeBSD': 'ec2-user',
+            'OmniOS': 'root',
+        }
+        self.aws.region = 'eu-central-1'
+        self.aws.size = 't2.micro'
+        self.aws.security_group = 'sshcrosscloud'
+        self.aws.image_id = 'ami-0e342d72b12109f91'
+        self.aws.image_name = 'ubuntu'
+        self.aws.credentials_path = str(Path.home()) + "/.aws/credentials"
+        self.aws.credentials_items = ['aws_access_key_id', 'aws_secret_access_key']
+
+        # Azure Variables
+        self.azure = Azure
+        self.azure.tenant_id = None
+        self.azure.subscription_id = None
+        self.azure.application_id = None
+        self.azure.secret = None
+        self.azure.public_ip_name = None
+        self.azure.virtual_network = None
+        self.azure.subnet = 'default'
+        self.azure.region = 'westus'
+        self.azure.size = 'Standard_B1ls'
+        self.azure.network_interface = 'sshcrosscloud-ni'
+        self.azure.image_id = 'UbuntuServer:16.04'
+        self.azure.image_name = 'ubuntu'
+        self.azure.resource_group = 'NetworkWatcherRG'
+        self.azure.publisher = 'Canonical'
+        self.azure.credentials_path = str(Path.home()) + "/.azure/credentials"
+        self.azure.credentials_items = ['tenant', 'subscription_id', 'client_id', 'secret']
+
+        # GCP Variables
+        self.gcp = GCP
+        self.gcp.user_id = None
+        self.gcp.key_path = None
+        self.gcp.project = None
+        self.gcp.data_center = None
+        self.gcp.region = 'us-central1-a'
+        self.gcp.size = 'f1-micro'
+        self.gcp.image_name = 'ubuntu'
+        self.gcp.credentials_path = str(Path.home()) + "/.gcp/credentials"
+        self.gcp.credentials_items = ['user_id', 'key', 'project', 'datacenter']
+
+        self._init_commands()
+
+    def _init_commands(self):
+        # TODO: here implement check_params from sshcrosscloud class
+        # SSH Script
+        if self.arg_dict.get('sshscript'):
+            self.ssh_script = self.arg_dict.get('sshscript')
+
+        # Arguments
+        if self.arg_dict['leave']:
+            self.final_state = "leave"
+
+        if self.arg_dict['stop']:
+            self.final_state = "stop"
+
+        if self.arg_dict['terminate']:
+            self.final_state = "terminate"
+
+        if self.arg_dict['detach']:
+            self.final_state = "leave"
+            self.ssh_detach = True
+            self.multiplex = True
+
+        if self.arg_dict['attach']:
+            self.final_state = "leave"
+            self.ssh_attach = True
+            self.multiplex = True
+            self.no_rsync_begin = True
+            self.no_rsync_end = True
+
+        if self.arg_dict['finish']:
+            self.no_rsync_begin = True
+
+        if self.arg_dict['verbose']:
+            self.rsync_verbose = True
+
+        if self.arg_dict['norsync']:
+            self.no_rsync_begin = True
+            self.no_rsync_end = True
+
+        if self.arg_dict['provider']:
+            self.provider = self.arg_dict['provider']
+
+        if self.arg_dict['L']:
+            self.ssh_params = self.ssh_params + " -L " + self.arg_dict['L']
+
+        if self.arg_dict['R']:
+            self.ssh_params = self.ssh_params + " -R " + self.arg_dict['L']
+
+        if self.arg_dict['i']:
+            self.pem_ssh = "-i" + self.arg_dict['i']
+
+        if self.arg_dict['v']:
+            logging.getLogger().setLevel(logging.INFO)
+            coloredlogs.install(level='INFO')
+
+        if self.arg_dict['debug']:
+            self.debug = True
+
+        if self.arg_dict['config']:
+            self.config = True
+
+        if self.arg_dict['status']:
+            self.status_mode = True
+            self.no_rsync_begin = True
+            self.no_rsync_end = True
+            self.no_attach = True
+            self.no_wait_until_init = True
+
+        if self.arg_dict['destroy']:
+            self.no_rsync_begin = True
+            self.no_rsync_end = True
+            self.no_attach = True
+            self.final_state = "terminate"
 
 
 def get_string_from_file(filepath):
@@ -129,3 +261,27 @@ def get_public_key(name: str) -> str:
         return rsa_pub
     else:
         raise Exception(str(Path.home()) + "/.ssh/" + name + ".pub " + "not found, add --config to create one")
+
+
+def get_ui_credentials(ssh):
+    if ssh.ssh_vars.config:
+        default_credentials_path = str(Path.home()) + "/." + ssh.ssh_vars.provider + "/credentials"
+        if os.path.isfile(default_credentials_path):
+            with open(default_credentials_path, 'r+') as file:
+                file_data = file.read()
+                if file_data:
+                    logging.info("Credentials have already been saved, would you like to change them? y/n")
+                    answer = input()
+                    if answer == 'y':
+                        list_of_credentials = {}
+                        for i in ssh.ssh_vars.credentials_items:
+                            print("Enter" + i + ":")
+                            input_credential = input()
+                            list_of_credentials[i] = input_credential
+
+                        return list_of_credentials
+                    else:
+                        logging.info("Credentials have not been changed")
+                        return
+
+    return

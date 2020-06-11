@@ -1,17 +1,18 @@
 import os
 import getpass as gt
+import subprocess
 import sys
 from pathlib import Path
-import socket
 import configparser
+import time
 import getpass
 from dotenv import find_dotenv, dotenv_values
 from libcloud.compute.providers import get_driver
 from libcloud.compute.types import Provider
 import logging
 
-from sshcrosscloud import utils
-from sshcrosscloud.utils import get_string_from_file
+from sshcrosscloud.libcloud_extended import get_provider_specific_driver
+from sshcrosscloud.utils import get_string_from_file, SSHVar
 
 """
 SSHCrossCloud Class
@@ -20,50 +21,30 @@ Basically contains all the attributes to create an instance on multiple provider
 """
 
 
-class SSHCrossCloud:
-    nbOfSshConnections = 0
+# TODO: tout ce qui est specific, ajouter dans libcloud extended
 
-    def __init__(self, pre_env, param_dict: dict):
-        # Init variables
-        self.pre_env = pre_env
-        self.param_dict = param_dict
-        self.default_dict = utils.global_dict
+class SSHCrossCloud:
+    def __init__(self, ssh_vars: SSHVar):
+        self.driver = None
+        self.ssh_vars = ssh_vars
 
         # Check that the parameters have only one action and one final state
         self._check_parameters()
 
         # dotenv values are taken form .env file
         self._init_env(dotenv_values(find_dotenv()), os.environ)
+
         self._init_variables()
 
-        # Credentials and provider specifics
-        self._init_provider_specifics()
-
-        # Credentials
-        self._init_credentials_path()
-
-        # Driver can be instantiated only after getting credentials
-        self._init_driver()
-
-        # These variables can only be set after the driver set
-        self._init_instance_attributes_from_name()
+        self.spe_driver = get_provider_specific_driver(self.ssh_vars)
 
     def _init_env(self, dotenv, environ):
         """
-        A la fin de la fonction, env possède les valeurs mélangées de
-        default, puis .env, puis environ.
+        This method creates a dict with dotenv values updated by the environment values,
+        then store them in the ssh_var object
         """
-        if self.pre_env['PROVIDER'] == 'AWS':
-            self.default_dict.update(utils.aws_default_dict)
-        elif self.pre_env['PROVIDER'] == 'AZURE':
-            self.default_dict.update(utils.azure_default_dict)
-        elif self.pre_env['PROVIDER'] == 'GCP':
-            self.default_dict.update(utils.gcp_default_dict)
-        else:
-            raise Exception(logging.warning("Provider not supported"))
-
         # Default
-        env = self.default_dict.copy()
+        env = {}
 
         # Dotenv
         for k, v in dotenv.items():
@@ -73,181 +54,369 @@ class SSHCrossCloud:
         for k, v in environ.items():
             env[k] = v
 
-        self.env = env
+        # Replace attributes that where declared in the env or dotenv
+        for attr, value in self.ssh_vars.__dict__.items():
+            if env.get(attr.upper()):
+                setattr(self.ssh_vars, attr, env.get(attr.upper()))
 
     def _init_variables(self):
         """
         A la fin de la fonction, env possède le maximum de variables d'environement
         calculés, pour ne plus avoir à gérer les erreurs ou les valeurs par défaut.
         """
-        self.env['PROJECT_NAME'] = os.path.basename(os.getcwd())
         # Specific to entreprise polygrams
-        if not self.env.get("POLYGRAM"):
-            self.env["USERNAME"] = gt.getuser()
+        if not self.ssh_vars.polygram:
+            self.ssh_vars.username = gt.getuser()
         else:
-            self.env["USERNAME"] = self.env["POLYGRAM"]
-        if not self.env.get('AWS_KEY_NAME'):
-            self.env['AWS_KEY_NAME'] = self.env['USERNAME']
-        if not self.env.get('INSTANCE_NAME'):
-            self.env['INSTANCE_NAME'] = self.env['AWS_KEY_NAME'].lower() + "-" + self.env['PROJECT_NAME']
-        if not self.env.get('AWS_RSYNC_DIR'):
-            self.env['AWS_RSYNC_DIR'] = os.getcwd()
-        if not self.env.get('PEM_SSH'):
-            self.env['PEM_SSH'] = "-i " + str(Path.home()) + "/.ssh/" + self.env['USERNAME']
+            self.ssh_vars.username = self.ssh_vars.polygram
+        if not self.ssh_vars.instance_name:
+            self.ssh_vars.instance_name = self.ssh_vars.username.lower() + "-sshcrosscloud"
 
-        if 'DEBUG' in self.env:
-            if self.env['DEBUG'] == "y":
-                self.env["FINAL_STATE"] = "leave"
+        # TODO: take care of this
+        # if not self.env.get('AWS_RSYNC_DIR'):
+        #     self.env['AWS_RSYNC_DIR'] = os.getcwd()
 
-        self.env['OS_NAME'] = os.name
-        self.env['USER_DATA'] = get_string_from_file(".user_data")
-        self.env['INSTANCE_USER'] = get_instance_user(self.env['PROVIDER'])
+        if not self.ssh_vars.pem_ssh:
+            self.ssh_vars.pem_ssh = "-i " + str(Path.home()) + "/.ssh/" + self.ssh_vars.username
 
-        tags = {
-            'Name': self.env['INSTANCE_NAME'],
-            'User': gt.getuser(),
-            'Hostname': socket.gethostname(),
-            'Username': self.env['USERNAME']
-        }
+        if self.ssh_vars.debug:
+            self.ssh_vars.final_state = "leave"
 
-        self.env['AWS_TAGS'] = "[" + str(tags) + "]"
-
-    def _init_provider_specifics(self):
-        if self.env['PROVIDER'] == "AWS":
-            if not self.env.get("REGION"):
-                self.env["REGION"] = get_aws_region(self.env['AWS_FILE_PATH'])
-            self.env['AWS_ACCESS_KEY_ID'], self.env['AWS_SECRET_ACCESS_KEY'] = get_credentials(
-                self.env['AWS_FILE_PATH'], self.env['PROVIDER'])
-
-        elif self.env['PROVIDER'] == "AZURE":
-            if not self.env.get("REGION"):
-                raise Exception("No region found, you must specify a region in .env file")
-            self.env['AZURE_TENANT_ID'], self.env['AZURE_SUBSCRIPTION_ID'], self.env['AZURE_APPLICATION_ID'], self.env[
-                'AZURE_SECRET'] = get_credentials(
-                self.env['AZURE_FILE_PATH'], self.env['PROVIDER'])
-            if not self.env.get("AZ_PUBLIC_IP_NAME"):
-                self.env['AZ_PUBLIC_IP_NAME'] = "sshcrosscloud-ip-" + self.env['USERNAME']
-            if not self.env.get("AZ_VIRTUAL_NETWORK"):
-                self.env['AZ_VIRTUAL_NETWORK'] = "sshcrosscloud-vn-" + self.env['USERNAME']
-            if not self.env.get("AZ_SUBNET"):
-                self.env['AZ_SUBNET'] = "sshcrosscloud-sn-" + self.env['USERNAME']
-
-        elif self.env['PROVIDER'] == "GCP":
-            if not self.env.get("REGION"):
-                raise Exception("No region found, you must specify a region in .env file")
-            self.env['GCP_USER_ID'], self.env['GCP_KEY_PATH'], self.env['GCP_PROJECT'], self.env[
-                'GCP_DATA_CENTER'] = get_credentials(
-
-                self.env['GCP_FILE_PATH'], self.env['PROVIDER'])
-        else:
-            logging.info("Provider not supported")
+        self.ssh_vars.user_data = get_string_from_file(".user_data")
 
     def _check_parameters(self):
-        if not self.param_dict.get('provider'):
+        if not self.ssh_vars.provider:
             raise Exception("You must chose a provider (aws, azure or gcp)")
-        list_final_state = (self.param_dict['leave'], self.param_dict['stop'], self.param_dict['terminate'])
+        list_final_state = (
+            self.ssh_vars.arg_dict['leave'], self.ssh_vars.arg_dict['stop'], self.ssh_vars.arg_dict['terminate'])
         if sum(list_final_state) > 1:
             raise Exception("Can't have multiple final states")
-        list_actions = (self.param_dict['detach'], self.param_dict['attach'], self.param_dict['finish'])
+        list_actions = (
+            self.ssh_vars.arg_dict['detach'], self.ssh_vars.arg_dict['attach'], self.ssh_vars.arg_dict['finish'])
         if sum(list_actions) > 1:
             raise Exception("Can't have multiple actions")
 
-    def _init_instance_attributes_from_name(self):
-        if self.env['PROVIDER'] == "AZURE":
-            nodes = self.driver.list_nodes(self.env['AZ_RESOURCE_GROUP'])
-        else:
-            nodes = self.driver.list_nodes()
-        for node in nodes:
-            if node.name == self.env['INSTANCE_NAME'] and node.state not in ["terminated"]:
-                self.env['INSTANCE_ID'] = node.id
-                self.env['INSTANCE_STATE'] = node.state
-                if node.state == "running":
-                    self.env['PUBLIC_IP'] = node.public_ips[0]
-
-    def _init_driver(self):
+    def init_provider_specifics(self):
         """
         AWS EC2  : AWS
         Azure VM : AZURE
         Google Compute Engine : GCP
         :param env:
-        :return: 0 if ok 1 if error
         """
         try:
-            if self.env["PROVIDER"] == "AWS":
-                cls = get_driver(Provider.EC2)
-                provider_driver = cls(self.env["AWS_ACCESS_KEY_ID"],
-                                      self.env["AWS_SECRET_ACCESS_KEY"],
-                                      region=self.env["REGION"])
-                print(provider_driver.create_key_pair("keytest").__dict__)
-            elif self.env["PROVIDER"] == "AZURE":
-                cls = get_driver(Provider.AZURE_ARM)
-                provider_driver = cls(tenant_id=self.env["AZURE_TENANT_ID"],
-                                      subscription_id=self.env["AZURE_SUBSCRIPTION_ID"],
-                                      key=self.env["AZURE_APPLICATION_ID"],
-                                      secret=self.env["AZURE_SECRET"])
-            elif self.env["PROVIDER"] == "GCP":
-                cls = get_driver(Provider.GCE)
-                provider_driver = cls(user_id=self.env['GCP_USER_ID'],
-                                      key=self.env['GCP_KEY_PATH'],
-                                      project=self.env['GCP_PROJECT'],
-                                      datacenter=self.env['GCP_DATA_CENTER'])
-            else:
-                logging.info("Provider not supported")
-                return 1
+            if self.ssh_vars.provider == "aws":
+                default_user_list = self.ssh_vars.aws.default_user_list
+                for i, j in default_user_list.items():
+                    if i.lower() in self.ssh_vars.aws.image_name.lower():
+                        self.ssh_vars.instance_user = j
 
-            self.driver = provider_driver
+                self.ssh_vars.credentials_items = self.ssh_vars.aws.credentials_items
+                self.ssh_vars.credentials_file_path = self.ssh_vars.aws.credentials_path
+
+                if not self.ssh_vars.aws.region:
+                    self.ssh_vars.aws.region = get_aws_region(self.ssh_vars.aws.credentials_path)
+                self.ssh_vars.aws.access_key_id, self.ssh_vars.aws.secret_access_key = get_credentials(
+                    self.ssh_vars.credentials_file_path, self.ssh_vars.provider)
+
+                cls = get_driver(Provider.EC2)
+                provider_driver = cls(self.ssh_vars.aws.access_key_id,
+                                      self.ssh_vars.aws.secret_access_key,
+                                      region=self.ssh_vars.aws.region)
+
+                self.driver = provider_driver
+                nodes = self.driver.list_nodes()
+
+            elif self.ssh_vars.provider == "azure":
+                self.ssh_vars.instance_user = "azure"
+
+                self.ssh_vars.credentials_items = self.ssh_vars.azure.credentials_items
+                self.ssh_vars.credentials_file_path = self.ssh_vars.azure.credentials_path
+
+                if not self.ssh_vars.azure.region:
+                    raise Exception("No region found, you must specify a region in .env file")
+                self.ssh_vars.azure.tenat_id, self.ssh_vars.azure.subscription_id, self.ssh_vars.azure.application_id, \
+                self.ssh_vars.azure.secret = get_credentials(self.ssh_vars.credentials_file_path,
+                                                             self.ssh_vars.provider)
+                if not self.ssh_vars.azure.public_ip_name:
+                    self.ssh_vars.azure.public_ip_name = "sshcrosscloud-ip-" + self.ssh_vars.username
+                if not self.ssh_vars.azure.virtual_network:
+                    self.ssh_vars.azure.virtual_network = "sshcrosscloud-vn-" + self.ssh_vars.username
+                if not self.ssh_vars.azure.subnet:
+                    self.ssh_vars.azure.subnet = "sshcrosscloud-sn-" + self.ssh_vars.username
+
+                cls = get_driver(Provider.AZURE_ARM)
+                provider_driver = cls(tenant_id=self.ssh_vars.azure.tenat_id,
+                                      subscription_id=self.ssh_vars.azure.subscription_id,
+                                      key=self.ssh_vars.azure.application_id,
+                                      secret=self.ssh_vars.azure.secret)
+
+                self.driver = provider_driver
+                nodes = self.driver.list_nodes(self.ssh_vars.azure.resource_group)
+
+            elif self.ssh_vars.provider == "gcp":
+                self.ssh_vars.instance_user = getpass.getuser()
+
+                self.ssh_vars.credentials_items = self.ssh_vars.gcp.credentials_items
+                self.ssh_vars.credentials_file_path = self.ssh_vars.gcp.credentials_path
+
+                if not self.ssh_vars.gcp.region:
+                    raise Exception("No region found, you must specify a region in .env file")
+                self.ssh_vars.gcp.user_id, self.ssh_vars.gcp.key_path, self.ssh_vars.gcp.project, self.ssh_vars.gcp.data_center \
+                    = get_credentials(self.ssh_vars.credentials_file_path, self.ssh_vars.provider)
+
+                cls = get_driver(Provider.GCE)
+                provider_driver = cls(user_id=self.ssh_vars.gcp.user_id,
+                                      key=self.ssh_vars.gcp.key_path,
+                                      project=self.ssh_vars.gcp.project,
+                                      datacenter=self.ssh_vars.gcp.data_center)
+
+                self.driver = provider_driver
+                nodes = self.driver.list_nodes()
+
+            else:
+                raise Exception("Provider not supported")
+
+            for node in nodes:
+                # TODO: manage other states (ex: shutting down)
+                if node.name == self.ssh_vars.instance_name and node.state not in ["terminated"]:
+                    self.ssh_vars.instance_id = node.id
+                    self.ssh_vars.instance_state = node.state
+                    self.ssh_vars.public_ip = node.public_ips[0]
 
         except:
             raise Exception("Could not get driver")
 
-    def _init_credentials_path(self):
+    def wait_until_initialization(self) -> None:
         """
-        Creates credentials
-        :param self:
-        :return: the path of the file where the credentials are stored
+        Tries to SSH the instance multiple times until it is initialized
+        :param ssh:
+        :return:0 if OK 1 if error 2 if no instance
         """
-        # TODO: GCP has another method for credentials, what to do ?
-        if self.env.get('CONFIG'):
-            default_credentials_path = self.env['PROVIDER_FILE_PATH']
-            if os.path.isfile(default_credentials_path):
-                with open(default_credentials_path, 'r+') as file:
-                    file_data = file.read()
-                    if file_data:
-                        logging.info("Credentials have already been saved, would you like to change them? y/n")
-                        answer = input()
-                        if answer == 'y':
-                            pass
-                        else:
-                            logging.info("Credentials have not been changed")
-                            self.env['PROVIDER_FILE_PATH'] = default_credentials_path
-                write_credentials(default_credentials_path, self.pre_env['PROVIDER'])
-                self.env['PROVIDER_FILE_PATH'] = default_credentials_path
-            else:
-                logging.warning("AWS Credentials file does not exist, create one (1) "
-                                "or give path to another credential file (2) ? ")
-                answer = input()
-                if answer == '1':
-                    write_credentials(default_credentials_path, self.pre_env['PROVIDER'])
-                    self.env['PROVIDER_FILE_PATH'] = default_credentials_path
-                elif answer == '2':
-                    logging.info("Enter the path to your credentials file: (ex :/path/to/your/file/.aws)")
-                    custom_credentials_path = input()
-                    write_credentials(custom_credentials_path, self.pre_env['PROVIDER'])
-                    self.env['PROVIDER_FILE_PATH'] = custom_credentials_path
+        if not self.ssh_vars.no_wait_until_init:
+            logging.info("Waiting for instance initialization...")
+            i = 0
+
+            # Try to connect to instance for a few times
+            while i < 10:
+                logging.info("Trying to connect... (" + str(i + 1) + ")")
+                try:
+                    # Works like a ping to know if ssh is ok
+
+                    if self.ssh_vars.debug:
+                        ssh_return = "ssh " + self.ssh_vars.ssh_default_params + " -v " + self.ssh_vars.pem_ssh + " " + \
+                                     self.ssh_vars.instance_user + "@" + self.ssh_vars.public_ip + " exit && echo $?"
+                    else:
+                        ssh_return = "ssh " + self.ssh_vars.ssh_default_params + " " + self.ssh_vars.pem_ssh + " " + \
+                                     self.ssh_vars.instance_user + "@" + self.ssh_vars.public_ip + " exit && echo $?"
+
+                    output_test = subprocess.check_output(ssh_return, shell=True)
+                    #TODO: get the output that s not clean
+
+                    # if '0' not in output_test:
+                    #     raise Exception("An error occured while attempting ssh to instance")
+
+                    logging.info("Instance is available")
+
+                    return
+
+                except subprocess.CalledProcessError:
+                    logging.info("Instance is not yet available")
+
+                time.sleep(5)
+                i += 1
+
+            raise Exception("Could not connect to instance, please try later")
+
+    def wait_for_public_ip(self, with_instance) -> None:
+        logging.info("Initializating instance...")
+
+        if with_instance:
+            node = self.spe_driver.get_node()
+        else:
+            node = self.spe_driver.create_instance()
+
+        nodes = [node]
+
+        # Azure needs a specified resource group
+        return_node = self.spe_driver.spe_wait_until_running(nodes)
+
+        if not return_node[0].public_ips:
+            raise Exception("No public IP available")
+
+        self.ssh_vars.instance_id = return_node[0].id
+        self.ssh_vars.public_ip = return_node[0].public_ips[0]
+
+        return
+
+    def manage_instance(self) -> None:
+        if not self.ssh_vars.status_mode:
+            # If no instance found, create one
+            if not self.ssh_vars.instance_id:  # TODO: si jamais deja dans l'env ??
+                if self.wait_for_public_ip(with_instance=False):
+                    raise Exception("Could not create instance")
+            if self.ssh_vars.instance_state == "unknown":
+                raise Exception("Instance stopping or shutting down, please try again later")
+            elif self.ssh_vars.instance_state == "stopped":
+                if self.spe_driver.start_instance() != 0:
+                    raise Exception("Could not start instance")
+                self.wait_for_public_ip(with_instance=True)
+
+    def attach_to_instance(self) -> None:
+        """
+        Open SSH terminal to instance and launch multiplex session if needed
+        :param ssh:
+        :return: 0 if SSH connection succeeded, 1 if not
+        """
+        if not self.ssh_vars.no_attach:
+
+            ssh_params = ""
+
+            if self.ssh_vars.ssh_params:
+                ssh_params = self.ssh_vars.ssh_params
+            if self.ssh_vars.debug:
+                ssh_params = ssh_params + " -v"
+
+            ssh_command = "ssh " + self.ssh_vars.ssh_default_params + ssh_params + " " + self.ssh_vars.pem_ssh + " " \
+                          + self.ssh_vars.instance_user + "@" + self.ssh_vars.public_ip + " "
+
+            if not self.ssh_vars.multiplex:
+                if self.ssh_vars.ssh_script:
+                    logging.info("ssh script : " + ssh_command + self.ssh_vars.ssh_script)
+                    #output_test = subprocess.check_output(ssh_command + self.ssh_vars.ssh_script, shell=True)
+                    os.system(ssh_command + self.ssh_vars.ssh_script)
+                    # if output_test != 0:
+                    #     raise Exception("An error occured while attempting ssh to instance")
+
                 else:
-                    raise Exception("You need a credentials file to create an instance")
+                    logging.info("no ssh script : " + ssh_command)
+                    #output_test = subprocess.check_output(ssh_command, shell=True)
+                    os.system(ssh_command)
+                    # if output_test != 0:
+                    #     raise Exception("An error occured while attempting ssh to instance")
+                return
+            else:
+                if self.ssh_vars.ssh_detach:
+                    if self.ssh_vars.ssh_script:
+                        multiplex_command = ssh_command + " -t 'tmux has-session -t " + self.ssh_vars.instance_name \
+                                            + " || tmux new-session -s " + self.ssh_vars.instance_name + " -d" \
+                                            + ' "' + self.ssh_vars.ssh_script + '"' + "'"
+                    else:
+                        multiplex_command = ssh_command + " -t 'tmux has-session -t " + self.ssh_vars.instance_name \
+                                            + " || tmux new-session -s " + self.ssh_vars.instance_name + " -d'"
 
+                    logging.info("--detach : " + multiplex_command)
+                    # output_test = subprocess.check_output(multiplex_command, shell=True)
+                    os.system(multiplex_command)
+                    # if output_test != 0:
+                    #     raise Exception("An error occured while attempting ssh and tmux to instance")
 
-def get_instance_user(provider: str):
-    if provider == "AWS":
-        default_user_list = utils.aws_default_user_list
-        for i, j in default_user_list.items():
-            if i.lower() in provider.lower():
-                return j
-    if provider == "AZURE":
-        return "azure"
-    if provider == "GCP":
-        return getpass.getuser()
+                    return
+
+                elif self.ssh_vars.ssh_attach:
+                    # ssh arg "-t" forces to allocate a terminal, does not not otherwise
+                    if self.ssh_vars.ssh_script:
+                        multiplex_command = ssh_command + " -t 'tmux attach-session -t " + self.ssh_vars.instance_name \
+                                            + " || tmux new-session -s " + self.ssh_vars.instance_name \
+                                            + ' "' + self.ssh_vars.ssh_script + '"' + "'"
+                    else:
+                        multiplex_command = ssh_command + " -t 'tmux attach-session -t " + self.ssh_vars.instance_name \
+                                            + " || tmux new-session -s " + self.ssh_vars.instance_name + "'"
+
+                    logging.info("--attach : " + multiplex_command)
+                    # output_test = subprocess.check_output(multiplex_command, shell=True)
+                    os.system(multiplex_command)
+                    # if output_test != 0:
+                    #     raise Exception("An error occured while attempting ssh to instance")
+
+                    return
+
+    def finish_action(self) -> None:
+        """
+        Terminates, destroys or leaves instances depending on the FINAL_STATE
+        :param ssh:
+        :return:0 if OK 1 if error
+        """
+        if not self.ssh_vars.status_mode:
+            if self.ssh_vars.final_state == "leave":
+                logging.warning("Your instance is still alive")
+                return
+
+            if self.ssh_vars.debug == "y":
+                logging.warning("Instance final state : " + self.ssh_vars.final_state)
+                return
+
+            if self.ssh_vars.nbOfSshConnections < 2:
+
+                if self.ssh_vars.final_state == "stop":
+                    logging.warning("Stopping instances...")
+                    self.spe_driver.stop_instance()
+
+                elif self.ssh_vars.final_state == "terminate":
+                    logging.warning("Terminating instances...")
+                    self.spe_driver.terminate_instance()
+
+                else:
+                    if self.ssh_vars.nbOfSshConnections > 1:
+                        self.ssh_vars.final_state = "leave"
+                        logging.warning("Another connection to EC2 instance is alive. The AWS EC2 instance is active")
+                    else:
+                        logging.warning("The AWS EC instance " + self.ssh_vars.instance_name + " is alive")
+
+                return
+
+    def rsync_to_instance(self) -> None:
+        """
+        Using rsync in command line to sync local directory to instance
+        :param ssh:
+        :return:
+        """
+        if self.ssh_vars.no_rsync_begin:
+            logging.info("No rsync to instance")
+        else:
+            logging.info("Synchronizing local directory to instance")
+            if self.ssh_vars.rsync_verbose:
+                command = "rsync -Pav -e 'ssh " + self.ssh_vars.ssh_default_params + " " + self.ssh_vars.pem_ssh \
+                          + "'" + " --exclude-from='.rsyncignore' $HOME/* " + \
+                          self.ssh_vars.instance_user + "@" + self.ssh_vars.public_ip + ":/home/" + self.ssh_vars.instance_user
+            else:
+                command = "rsync -Pa -e 'ssh " + self.ssh_vars.ssh_default_params + " " + self.ssh_vars.pem_ssh \
+                          + "'" + " --exclude-from='.rsyncignore' $HOME/* " + \
+                          self.ssh_vars.instance_user + "@" + self.ssh_vars.public_ip + ":/home/" + self.ssh_vars.instance_user
+
+            os.system(command)
+            #output_test = subprocess.check_output(command, shell=True)
+            # TODO: idem
+            # if output_test != 0:
+            #     raise Exception("An error occured while attempting ssh to instance")
+
+        return
+
+    def rsync_back_to_local(self) -> None:
+        """
+        Rsync back
+        :param ssh:
+        :return:
+        """
+        if self.ssh_vars.no_rsync_end:
+            logging.info("No rsync back to local")
+        else:
+            logging.info("Synchronizing directory back to local")
+            if self.ssh_vars.rsync_verbose:
+                command = "rsync -vzaP -r -e 'ssh -o StrictHostKeyChecking=no -o LogLevel=quiet " + self.ssh_vars.pem_ssh \
+                          + "' " + self.ssh_vars.instance_user + "@" + self.ssh_vars.public_ip + \
+                          ":/home/" + self.ssh_vars.instance_user + "/*" + " $HOME"
+            else:
+                command = "rsync -zaP -r -e 'ssh -o StrictHostKeyChecking=no -o LogLevel=quiet " + self.ssh_vars.pem_ssh \
+                          + "' " \
+                          + self.ssh_vars.instance_user + "@" + self.ssh_vars.public_ip + \
+                          ":/home/" + self.ssh_vars.instance_user + "/*" + " $HOME"
+
+            #output_test = subprocess.check_output(command, shell=True)
+            os.system(command)
+            # if output_test != 0:
+            #     raise Exception("An error occured while attempting ssh to instance")
+
+        return
 
 
 def get_aws_region(path: str):
@@ -263,26 +432,25 @@ def get_aws_region(path: str):
 
 
 def get_credentials(path: str, provider: str):
-    if provider == 'AWS':
-        credentials_path = path + "/credentials"
-        if os.path.isfile(credentials_path):
+    # TODO: put in specifics
+    if provider == 'aws':
+        if os.path.isfile(path):
 
             config = configparser.ConfigParser()
-            config.read(credentials_path)
+            config.read(path)
             aws_access_key_id = config['default']['aws_access_key_id']
             aws_secret_access_key = config['default']['aws_secret_access_key']
 
             return aws_access_key_id, aws_secret_access_key
         else:
-            raise Exception("No credentials found in " + credentials_path +
+            raise Exception("No credentials found in " + path +
                             ", run sshcrosscloud --config -- provider aws")
 
-    elif provider == 'AZURE':
-        credentials_path = path + "/credentials"
-        if os.path.isfile(credentials_path):
+    elif provider == 'azure':
+        if os.path.isfile(path):
 
             config = configparser.ConfigParser()
-            config.read(credentials_path)
+            config.read(path)
             tenant_id = config['default']['tenant']
             subscription_id = config['default']['subscription_id']
             client_id = config['default']['client_id']
@@ -290,15 +458,14 @@ def get_credentials(path: str, provider: str):
 
             return tenant_id, subscription_id, client_id, secret
         else:
-            raise Exception("No credentials found in " + credentials_path + ", run sshcrosscloud --config -- provider azure")
+            raise Exception(
+                "No credentials found in " + path + ", run sshcrosscloud --config -- provider azure")
 
-    elif provider == 'GCP':
+    elif provider == 'gcp':
         # TODO: different methods : json https://cloud.google.com/docs/authentication/production?hl=fr#auth-cloud-explicit-python
-        credentials_path = path + "/credentials"
-        if os.path.isfile(credentials_path):
-
+        if os.path.isfile(path):
             config = configparser.ConfigParser()
-            config.read(credentials_path)
+            config.read(path)
             user_id = config['default']['user_id']
             key = config['default']['key']
             project = config['default']['project']
@@ -306,65 +473,8 @@ def get_credentials(path: str, provider: str):
 
             return user_id, key, project, datacenter
         else:
-            raise Exception("No credentials found in " + credentials_path + ", run sshcrosscloud --config -- provider gcp")
+            raise Exception(
+                "No credentials found in " + path + ", run sshcrosscloud --config -- provider gcp")
 
     else:
         raise Exception("Provider not supported")
-
-
-def write_credentials(path: str, provider: str):
-    if provider == 'AWS':
-        with open(path, 'w') as cred_file:
-            logging.info("Enter AWS ACCESS KEY ID:")
-            aws_access_key_id = input()
-            logging.info("Enter AWS SECRET ACCESS ID:")
-            aws_secret_access_key = input()
-            logging.info("Enter REGION:")
-            aws_region = input()
-
-            config = configparser.ConfigParser()
-            config['default'] = {'aws_access_key_id': aws_access_key_id,
-                                 'aws_secret_access_key': aws_secret_access_key,
-                                 'region': aws_region}
-
-            config.write(cred_file)
-            logging.info("Credentials have been saved")
-
-    elif provider == 'AZURE':
-        with open(path, 'w') as cred_file:
-            logging.info("Enter AZURE Tenant:")
-            tenant = input()
-            logging.info("Enter AZURE Subscription ID:")
-            subscription_id = input()
-            logging.info("Enter AZURE Client ID:")
-            client_id = input()
-            logging.info("Enter AZURE Secret:")
-            secret = input()
-            config = configparser.ConfigParser()
-            config['default'] = {'tenant': tenant,
-                                 'subscription_id': subscription_id,
-                                 'client_id': client_id,
-                                 'secret': secret}
-
-            config.write(cred_file)
-            logging.info("Credentials have been saved")
-
-    elif provider == 'GCP':
-        with open(path, 'w') as cred_file:
-            logging.info("Enter GCP User ID:")
-            user_id = input()
-            logging.info("Enter GCP Key ID:")
-            key = input()
-            logging.info("Enter GCP Project ID:")
-            project = input()
-            logging.info("Enter GCP Datacenter ID:")
-            datacenter = input()
-
-            config = configparser.ConfigParser()
-            config['default'] = {'user_id': user_id,
-                                 'key': key,
-                                 'project': project,
-                                 'datacenter': datacenter}
-
-            config.write(cred_file)
-            logging.info("Credentials have been saved")

@@ -1,11 +1,16 @@
+import configparser
 import logging
 import os
-import sys
 import stat
+import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
-from sshcrosscloud.ssh_cross_cloud import SSHCrossCloud
+
+import sshcrosscloud.utils as utils
 from libcloud.compute.base import NodeAuthSSHKey
+from libcloud.compute.drivers.ec2 import BaseEC2NodeDriver
+from libcloud.compute.drivers.azure_arm import AzureNodeDriver
+from libcloud.compute.drivers.gce import GCENodeDriver
 from sshcrosscloud.utils import get_public_key
 
 """
@@ -15,7 +20,12 @@ This class is an upgrade of libcloud to simplify the use of SSH CROSS CLOUD
 """
 
 
+# TODO: image id /image name
+# TODO: credentials paths are a mess
+
 class ProviderSpecific(ABC):
+    ssh_vars = None
+    driver = None
 
     @abstractmethod
     def create_instance(self):
@@ -34,6 +44,15 @@ class ProviderSpecific(ABC):
         pass
 
     @abstractmethod
+    # TODO: put somewhere
+    def display_instances(self):
+        """
+
+        :return:
+        """
+        pass
+
+    @abstractmethod
     def _init_rsa_key_pair(self):
         """
 
@@ -41,114 +60,249 @@ class ProviderSpecific(ABC):
         """
         pass
 
+    @abstractmethod
+    def spe_wait_until_running(self, nodes):
+        """
+
+        :return:
+        """
+        pass
+
+    @abstractmethod
+    def start_instance(self):
+        """
+
+        :return:
+        """
+        pass
+
+    @abstractmethod
+    def stop_instance(self):
+        """
+
+        :return:
+        """
+        pass
+
+    @abstractmethod
+    def terminate_instance(self):
+        """
+
+        :return:
+        """
+        pass
+
+    def write_credentials(self, credentials: dict):
+        if not credentials:
+            logging.info("Skip writting credentials")
+        else:
+            config = configparser.ConfigParser()
+            config['default'] = credentials
+            with open(self.ssh_vars.credentials_file_path, 'w') as cred_file:
+                config.write(cred_file)
+            logging.info("Credentials have been saved")
+
     def create_local_rsa_key_pair(self):
         logging.info("Creating key pair")
+        # TODO: key name not to good and test command
 
-        genrate_key_pair = "ssh-keygen -f " + str(Path.home()) + "/.ssh/" + self.ssh.env["USERNAME"]
+        genrate_key_pair = "ssh-keygen -f " + str(Path.home()) + "/.ssh/" + self.ssh_vars.username
 
         pub_from_priv = "ssh-keygen -y -f " + str(Path.home()) + "/.ssh/" \
-                        + self.ssh.env["USERNAME"] + " > " + str(Path.home()) \
-                        + "/.ssh/" + self.ssh.env["USERNAME"] + ".pub"
+                        + self.ssh_vars.username + " > " + str(Path.home()) \
+                        + "/.ssh/" + self.ssh_vars.username + ".pub"
 
-        if os.path.isfile(str(Path.home()) + "/.ssh" + self.ssh.env["USERNAME"]):
-            if os.path.isfile(str(Path.home()) + "/.ssh" + self.ssh.env["USERNAME"] + ".pub"):
+        if os.path.isfile(str(Path.home()) + "/.ssh/" + self.ssh_vars.username):
+            if os.path.isfile(str(Path.home()) + "/.ssh/" + self.ssh_vars.username + ".pub"):
                 logging.info("Key pair already stored")
             else:
                 logging.info(
-                    "Creating key pair from existing key in " + str(Path.home()) + "/.ssh" + self.ssh.env["USERNAME"])
+                    "Creating key pair from existing key in " + str(Path.home()) + "/.ssh/" + self.ssh_vars.username)
                 os.system(pub_from_priv)
         else:
             os.system(genrate_key_pair)
-            os.chmod(str(Path.home()) + "/.ssh/" + self.ssh.env["USERNAME"], stat.S_IRWXU)
+            os.chmod(str(Path.home()) + "/.ssh/" + self.ssh_vars.username, stat.S_IRWXU)
 
-        if os.path.isfile(str(Path.home()) + "/.ssh/" + self.ssh.env["USERNAME"] + ".pub"):
+        if os.path.isfile(str(Path.home()) + "/.ssh/" + self.ssh_vars.username + ".pub"):
             logging.info("Key pair created")
-            return 0
+            return
+
+    def display_instances_no_arg(self):
+        nodes = self.driver.list_nodes()
+        if not nodes:
+            print("No instance running")
+        print("------------------------------------------------------")
+        for node in nodes:
+            print(node)
+        print("------------------------------------------------------")
+
+    def stop_instance_no_arg(self) -> None:
+        nodes = self.driver.list_nodes()
+        if not nodes:
+            logging.info("No instance running")
+
+        for node in nodes:
+            if node.id == self.ssh_vars.instance_id and node.state != "terminated":
+                terminate = self.driver.ex_stop_node(node)
+                if terminate:
+                    logging.warning("Stopped : " + node.id)
+                    return
+                else:
+                    raise Exception("An error has occurred while stopping instance")
+        return
+
+    def start_instance_no_arg(self) -> None:
+        """
+        Starts a stopped instance
+        :param ssh:
+        :return:
+        """
+        nodes = self.driver.list_nodes()
+        if not nodes:
+            logging.info("No instance running")
+
+        for node in nodes:
+            if node.id == self.ssh_vars.instance_id and node.state == "stopped":
+                start = self.driver.ex_start_node(node)
+                if start:
+                    logging.info("Started : " + node.id)
+                    return
+                else:
+                    raise Exception("An error has occurred while starting instance")
+        return
+
+    def terminate_instance_no_arg(self) -> None:
+        """
+        Terminates all owner's instances
+        :param ssh:
+        :return:
+        """
+        nodes = self.driver.list_nodes()
+        for node in nodes:
+            if node.id == self.ssh_vars.instance_id and node.state != "terminated":
+                if self.ssh_vars.provider == 'AZURE':
+                    stop = self.driver.destroy_node(node=node, ex_destroy_vhd=True, ex_destroy_nic=False)
+                    volumes = self.driver.list_volumes(ex_resource_group=self.ssh_vars.azure.resource_group)
+                    volume = [v for v in volumes if "sshcrosscloud" in v.name][0]
+                    self.driver.destroy_volume(volume)
+                else:
+                    stop = self.driver.destroy_node(node=node)
+                if stop:
+                    logging.warning("Terminated : " + node.id)
+                    return
+                else:
+                    raise Exception("An error has occurred while terminating instance")
+        return
 
 
 class SpecificAWS(ProviderSpecific):
-    def __init__(self, ssh):
-        self.ssh = ssh
+    def __init__(self, ssh_vars):
+        self.ssh_vars = ssh_vars
+        self.driver = None
+
+    def create_instance(self):
+
         self._init_rsa_key_pair()
         self._init_size()
         self._init_image()
         self._init_security_group()
 
-    def create_instance(self):
-        logging.info("Instance parameters : " + self.ssh.env['INSTANCE_NAME'] + self.image + self.size)
-        node = self.ssh.driver.create_node(name=self.ssh.env['INSTANCE_NAME'],
-                                           image=self.image,  # Need to use Libcloud object, can't use string
-                                           size=self.size,
-                                           ex_userdata=self.ssh.env['USER_DATA'],
-                                           ex_keyname=self.ssh.env["USERNAME"],
-                                           ex_securitygroup=self.security_group)
+        logging.info("Instance parameters : " + self.ssh_vars.instance_name + self.ssh_vars.aws.image_id
+                     + self.ssh_vars.aws.size)
+
+        node = self.driver.create_node(name=self.ssh_vars.instance_name,
+                                       image=self.image,  # Need to use Libcloud object, can't use string
+                                       size=self.size,
+                                       ex_userdata=self.ssh_vars.user_data,
+                                       ex_keyname=self.ssh_vars.username,
+                                       ex_securitygroup=[self.security_group.name])
 
         return node
 
     def get_node(self):
-        nodes = self.ssh.driver.list_nodes()
+        nodes = self.driver.list_nodes()
         if not nodes:
             raise Exception("No instance found")
-        if self.ssh.env.get('INSTANCE_ID'):
+        if self.ssh_vars.instance_id:
             for node in nodes:
-                if node.id == self.ssh.env['INSTANCE_ID']:
+                if node.id == self.ssh_vars.instance_id:
                     return node
             raise Exception("No instance found")
         else:
             raise Exception("No instance ID registered")
 
+    def start_instance(self):
+        self.start_instance_no_arg()
+
+    def stop_instance(self):
+        self.stop_instance_no_arg()
+
+    def terminate_instance(self):
+        self.terminate_instance_no_arg()
+
+    def display_instances(self):
+        self.display_instances_no_arg()
+
+    def spe_wait_until_running(self, nodes):
+        return self.driver.wait_until_running(nodes=nodes)[0]
+
     def _init_rsa_key_pair(self):
         logging.info("Creating key pair")
 
-        if os.path.isfile(str(Path.home()) + "/.ssh" + self.ssh.env['USERNAME']):
-            if self.ssh.env['USERNAME'] in self.ssh.driver.ex_list_keypairs():
-                logging.info("Key pair already stored")
-            else:
-                logging.info(
-                    "Creating key pair from existing key in " + str(Path.home()) + "/.ssh" + self.ssh.env[
-                        'USERNAME'])
-                self.ssh.driver.import_key_pair_from_file(name=self.ssh.env['USERNAME'],
-                                                          key_file_path=str(Path.home())
-                                                                        + "/.ssh" + self.ssh.env['USERNAME'])
-        else:
-            keypair = self.ssh.driver.create_key_pair(name=self.ssh.env['USERNAME'])
-            rsa_key = keypair.get('KeyMaterial')
-            with open(str(Path.home()) + "/.ssh/" + self.ssh.env['USERNAME'], 'w') as file:
-                file.write(rsa_key)
-            os.chmod(str(Path.home()) + "/.ssh/" + self.ssh.env['USERNAME'], stat.S_IRWXU)
+        if os.path.isfile(str(Path.home()) + "/.ssh/" + self.ssh_vars.username):  # TODO: changer username
+            for key in self.driver.ex_list_keypairs():
+                if self.ssh_vars.username == key['keyName']:
+                    logging.info("Key pair already stored")
+                    return
 
-            logging.info("Key pair created")
+            logging.info(
+                "Creating key pair from existing key in " + str(Path.home()) + "/.ssh/" + self.ssh_vars.username)
+            self.driver.import_key_pair_from_file(name=self.ssh_vars.username,
+                                                  key_file_path=str(
+                                                      Path.home()) + "/.ssh/" + self.ssh_vars.username)
+            return
+        else:
+            keypair = self.driver.create_key_pair(
+                name=self.ssh_vars.username)  # TODO: vérifier la demande de mdp à l'utilisateur
+            rsa_key = keypair.private_key
+
+            with open(str(Path.home()) + "/.ssh/" + self.ssh_vars.username, 'w') as file:
+                file.write(rsa_key)
+            os.chmod(str(Path.home()) + "/.ssh/" + self.ssh_vars.username, stat.S_IRWXU)
+
+            logging.info("Key pair created")  # TODO: informer l'utilisateur du nom de la clé créée
 
     def _init_size(self):
-        sizes = self.ssh.driver.list_sizes()
-        selected_sizes = [s for s in sizes if s.id == self.ssh.env['INSTANCE_TYPE']]
+        sizes = self.driver.list_sizes()
+        selected_sizes = [s for s in sizes if s.id == self.ssh_vars.aws.size]
         if not selected_sizes:
-            raise Exception(self.ssh.env['INSTANCE_TYPE'] + " is not available in AWS")
+            raise Exception(self.ssh_vars.aws.size + " is not available in AWS")
         else:
             self.size = selected_sizes[0]
 
     def _init_image(self):
-        images = self.ssh.driver.list_images()
-        selected_images = [i for i in images if i.id == self.ssh.env['IMAGE_ID']]
+        images = self.driver.list_images()
+        selected_images = [i for i in images if i.id == self.ssh_vars.aws.image_id]
         if not selected_images:
-            raise Exception(self.ssh.env['IMAGE_ID'] + " is not available in AWS")
+            raise Exception(self.ssh_vars.aws.image_id + " is not available in AWS")
         else:
             self.image = selected_images[0]
 
     def _init_security_group(self):
-        group_names = [self.ssh.env.get('SECURITY_GROUP')]
-        security_groups = self.ssh.driver.ex_get_security_groups(group_names=group_names)
+        # TODO: separated UI
+        group_names = [self.ssh_vars.aws.security_group]
+        security_groups = self.driver.ex_get_security_groups(group_names=group_names)
         if not security_groups:
             logging.info("No security group found, would you like to create one? y/n")
             answer = input()
             if answer == 'y':
-                security_group_lst = self.ssh.driver.ex_create_security_group(
-                    self.ssh.env['SECURITY_GROUP'],
-                    self.ssh.env['SECURITY_GROUP'] + " security group")
+                security_group_lst = self.driver.ex_create_security_group(
+                    self.ssh_vars.aws.security_group,
+                    self.ssh_vars.aws.security_group + " security group")
                 if not security_group_lst.get('group_id'):
                     raise Exception("Could not create security group")
                 else:
-                    security_groups = self.ssh.driver.ex_get_security_groups(
+                    security_groups = self.driver.ex_get_security_groups(
                         group_ids=security_group_lst.get('group_id'))
             else:
                 logging.info("No security group created")
@@ -157,8 +311,11 @@ class SpecificAWS(ProviderSpecific):
 
 
 class SpecificAzure(ProviderSpecific):
-    def __init__(self, ssh):
-        self.ssh = ssh
+    def __init__(self, ssh_vars):
+        self.ssh_vars = ssh_vars
+        self.driver = None
+
+    def create_instance(self):
         self._init_rsa_key_pair()
         self._init_location()
         self._init_size()
@@ -170,99 +327,160 @@ class SpecificAzure(ProviderSpecific):
         self._init_public_ip()
         self._init_network_interface()
 
-    def create_instance(self):
         # Node Creation
-        logging.info("Instance parameters : " + self.ssh.env['INSTANCE_NAME'] + self.image + self.size)
-        node = self.ssh.driver.create_node(name=self.ssh.env['INSTANCE_NAME'],
-                                           image=self.image,
-                                           size=self.size,
-                                           ex_user_name=self.ssh.env['INSTANCE_USER'],
-                                           auth=self.auth,
-                                           ex_resource_group=self.resource_group.name,
-                                           ex_network=self.virtual_network.name,
-                                           ex_use_managed_disks=True,
-                                           ex_nic=self.network_interface,
-                                           location=self.location,
-                                           # this argument is useless, but libcloud requires it
-                                           ex_storage_account="useless")
+        logging.info("Instance parameters : " + self.ssh_vars.instance_name + " - "
+                     + self.image.name + " - " + self.size.name)
+
+        node = self.driver.create_node(name=self.ssh_vars.instance_name,
+                                       image=self.image,
+                                       size=self.size,
+                                       ex_user_name=self.ssh_vars.instance_user,
+                                       auth=self.auth,
+                                       ex_resource_group=self.resource_group.name,
+                                       ex_network=self.virtual_network.name,
+                                       ex_use_managed_disks=True,
+                                       ex_nic=self.network_interface,
+                                       location=self.location,
+                                       # this argument is useless, but libcloud requires it
+                                       ex_storage_account="useless")
 
         return node
 
     def get_node(self):
-        nodes = self.ssh.driver.list_nodes(self.ssh.env['AZ_RESOURCE_GROUP'])
+        nodes = self.driver.list_nodes(self.ssh_vars.azure.resource_group)
         if not nodes:
             raise Exception("No instance found")
-        if self.ssh.env.get('INSTANCE_ID'):
+        if self.ssh_vars.instance_id:
             for node in nodes:
-                if node.id == self.ssh.env['INSTANCE_ID']:
+                if node.id == self.ssh_vars.instance_id:
                     return node
             raise Exception("No instance found")
         else:
             raise Exception("No instance ID registered")
 
+    def start_instance(self) -> None:
+        nodes = self.driver.list_nodes(self.ssh_vars.azure.resource_group)
+        if not nodes:
+            logging.info("No instance running")
+        for node in nodes:
+            if node.id == self.ssh_vars.instance_id and node.state == "stopped":
+                start = self.driver.ex_start_node(node)
+                if start:
+                    logging.info("Started : " + node.id)
+                    return
+                else:
+                    raise Exception("An error has occurred while starting instance")
+        return
+
+    def stop_instance(self) -> None:
+        nodes = self.driver.list_nodes(self.ssh_vars.azure.resource_group)
+        if not nodes:
+            logging.info("No instance running")
+        for node in nodes:
+            if node.id == self.ssh_vars.instance_id and node.state != "terminated":
+                terminate = self.driver.ex_stop_node(node)
+                if terminate:
+                    logging.warning("Stopped : " + node.id)
+                    return
+                else:
+                    raise Exception("An error has occurred while stopping instance")
+        return
+
+    def terminate_instance(self) -> None:
+        nodes = self.driver.list_nodes(self.ssh_vars.azure.resource_group)
+        for node in nodes:
+            if node.id == self.ssh_vars.instance_id and node.state != "terminated":
+                if self.ssh_vars.provider == 'AZURE':
+                    stop = self.driver.destroy_node(node=node, ex_destroy_vhd=True, ex_destroy_nic=False)
+                    volumes = self.driver.list_volumes(ex_resource_group=self.ssh_vars.azure.resource_group)
+                    volume = [v for v in volumes if "sshcrosscloud" in v.name][0]
+                    self.driver.destroy_volume(volume)
+                else:
+                    stop = self.driver.destroy_node(node=node)
+                if stop:
+                    logging.warning("Terminated : " + node.id)
+                    return
+                else:
+                    raise Exception("An error has occurred while terminating instance")
+        return
+
+    def display_instances(self):
+        nodes = self.driver.list_nodes(self.ssh_vars.azure.resource_group)
+        if not nodes:
+            print("No instance running")
+        print("------------------------------------------------------")
+        for node in nodes:
+            print(node)
+        print("------------------------------------------------------")
+
+    def spe_wait_until_running(self, nodes):
+        list_node_args = {'ex_resource_group': 'NetworkWatcherRG'}
+        return self.driver.wait_until_running(nodes=nodes, ex_list_nodes_kwargs=list_node_args)[0]
+
     def _init_rsa_key_pair(self):
         self.create_local_rsa_key_pair()
 
     def _init_size(self):
-        sizes = self.ssh.driver.list_sizes(self.location)
-        selected_sizes = [s for s in sizes if s.id == self.ssh.env['INSTANCE_TYPE']]
+        sizes = self.driver.list_sizes(self.location)
+        selected_sizes = [s for s in sizes if s.id == self.ssh_vars.azure.size]
         if not selected_sizes:
-            raise Exception(self.ssh.env['INSTANCE_TYPE'] + " is not available in AWS")
+            raise Exception(self.ssh_vars.azure.size + " is not available in Azure")
         else:
             self.size = selected_sizes[0]
 
     def _init_image(self):
-        images = self.ssh.driver.list_images(location=self.location, ex_publisher=self.ssh.env['AZ_PUBLISHER'])
-        selected_images = [i for i in images if self.ssh.env['IMAGE_ID'] in i.id]
+        images = self.driver.list_images(location=self.location, ex_publisher=self.ssh_vars.azure.publisher)
+        selected_images = [i for i in images if self.ssh_vars.azure.image_id in i.id]
         if not selected_images:
-            raise Exception(self.ssh.env['IMAGE_ID'] + " is not available in AWS")
+            raise Exception(self.ssh_vars.azure.image_id + " is not available in AWS")
         else:
             self.image = selected_images[0]
 
     def _init_location(self):
-        locations = self.ssh.driver.list_locations()
-        selected_locations = [l for l in locations if l.id == self.ssh.env['REGION']]
+        locations = self.driver.list_locations()
+        selected_locations = [loc for loc in locations if loc.id == self.ssh_vars.azure.region]
         if not selected_locations:
-            raise Exception(self.ssh.env['REGION'] + " is not available in AWS")
+            raise Exception(self.ssh_vars.azure.region + " is not available in AWS")
         else:
             self.location = selected_locations[0]
 
     def _init_resource_group(self):
-        rgs = self.ssh.driver.ex_list_resource_groups()
-        selected_rg = [rg for rg in rgs if rg.name == self.ssh.env['AZ_RESOURCE_GROUP']]
+        rgs = self.driver.ex_list_resource_groups()
+        selected_rg = [rg for rg in rgs if rg.name == self.ssh_vars.azure.resource_group]
         if not selected_rg:
-            raise Exception(self.ssh.env['AZ_RESOURCE_GROUP'] + " does not exist")
+            raise Exception(self.ssh_vars.azure.resource_group + " does not exist")
         else:
             self.resource_group = selected_rg[0]
 
     def _init_auth(self):
         # Libcloud does not allow key vault for Azure, therefore need to store public key locally
-        self.auth = NodeAuthSSHKey(get_public_key(self.ssh.env['USERNAME']))
+        self.auth = NodeAuthSSHKey(get_public_key(self.ssh_vars.username))  # TODO: idem not username for key
 
     def _init_virtual_network(self):
-        if not self.ssh.driver.ex_list_networks():
+        if not self.driver.ex_list_networks():
             raise Exception("You must create a Virtual Network in Resource Group : " + self.resource_group.name)
         else:
-            self.virtual_network = self.ssh.driver.ex_list_networks()[0]
+            self.virtual_network = self.driver.ex_list_networks()[0]
 
     def _init_security_group(self):
-        if not self.ssh.driver.ex_list_network_security_groups(resource_group=self.resource_group.name):
+        if not self.driver.ex_list_network_security_groups(resource_group=self.resource_group.name):
             logging.warning("No Security Group found, it is advised to create one for increased security.")
         else:
             self.security_group = \
-                self.ssh.driver.ex_list_network_security_groups(resource_group=self.resource_group.name)[0]
+                self.driver.ex_list_network_security_groups(resource_group=self.resource_group.name)[0]
 
     def _init_public_ip(self):
-        pips = self.ssh.driver.ex_list_public_ips(resource_group=self.resource_group.name)
-        selected_pips = [ip for ip in pips if ip.name == self.ssh.env['AZ_PUBLIC_IP_NAME']]
+        # TODO: separated UI
+        pips = self.driver.ex_list_public_ips(resource_group=self.resource_group.name)
+        selected_pips = [ip for ip in pips if ip.name == self.ssh_vars.azure.public_ip_name]
         if not selected_pips:
-            logging.warning(self.ssh.env['AZ_PUBLIC_IP_NAME'] + " ip does not exist, create one ? y/n")
+            print(self.ssh_vars.azure.public_ip_name + " ip does not exist, create one ? y/n")
             answer = input()
             if answer == 'y':
-                public_ip = self.ssh.driver.ex_create_public_ip(self.ssh.env['AZ_PUBLIC_IP_NAME'],
-                                                                resource_group=self.resource_group.name,
-                                                                location=self.location,
-                                                                public_ip_allocation_method="Dynamic")
+                public_ip = self.driver.ex_create_public_ip(self.ssh_vars.azure.public_ip_name,
+                                                            resource_group=self.resource_group.name,
+                                                            location=self.location,
+                                                            public_ip_allocation_method="Dynamic")
                 if not public_ip:
                     raise Exception("Error while creating ip")
             else:
@@ -271,70 +489,90 @@ class SpecificAzure(ProviderSpecific):
             self.public_ip = selected_pips[0]
 
     def _init_network_interface(self):
-        nics = self.network_interface = self.ssh.driver.ex_list_nics(resource_group=self.resource_group.name)
-        selected_nics = [ni for ni in nics if ni.name == self.ssh.env['AZ_PUBLIC_IP_NAME']]
+        nics = self.network_interface = self.driver.ex_list_nics(resource_group=self.resource_group.name)
+        selected_nics = [ni for ni in nics if ni.name == self.ssh_vars.azure.public_ip_name]
         if not selected_nics:
-            sns = self.ssh.driver.ex_list_subnets(self.virtual_network)
-            selected_nics = [sn for sn in sns if sn.name == self.ssh.env['AZ_SUBNET']]
+            sns = self.driver.ex_list_subnets(self.virtual_network)
+            selected_nics = [sn for sn in sns if sn.name == self.ssh_vars.azure.subnet]
             if not selected_nics:
-                raise Exception("You must create a Subnet '" + self.ssh.env['AZ_SUBNET'] + "' in Virtual Network : "
+                raise Exception("You must create a Subnet '" + self.ssh_vars.azure.subnet + "' in Virtual Network : "
                                 + self.virtual_network.name)
             else:
                 sn = selected_nics[0]
-                self.network_interface = self.ssh.driver.ex_create_network_interface(name="sshcrosscloud-ni",
-                                                                                     resource_group=self.resource_group.name,
-                                                                                     location=self.location,
-                                                                                     public_ip=self.public_ip,
-                                                                                     subnet=sn)
+                self.network_interface = self.driver.ex_create_network_interface(
+                    name=self.ssh_vars.azure.network_interface,
+                    resource_group=self.resource_group.name,
+                    location=self.location,
+                    public_ip=self.public_ip,
+                    subnet=sn)
         else:
             self.network_interface = selected_nics[0]
 
 
 class SpecificGPC(ProviderSpecific):
-    def __init__(self, ssh):
-        self.ssh = ssh
+    def __init__(self, ssh_vars):
+        self.ssh_vars = ssh_vars
+        self.driver = None
+
+    def create_instance(self):
         self._init_rsa_key_pair()
         self._init_image()
         self._init_size()
         self._init_metadata()
 
-    def create_instance(self):
-        logging.info("Instance parameters : " + self.ssh.env['INSTANCE_NAME'] + self.image + self.size)
-        node = self.ssh.driver.create_node(name=self.ssh.env['INSTANCE_NAME'],
-                                           image=self.image,
-                                           size=self.size,
-                                           ex_metadata=self.metadata)
+        logging.info("Instance parameters : " + self.ssh_vars.instance_name + self.image.name
+                     + self.size.name)
+
+        node = self.driver.create_node(name=self.ssh_vars.instance_name,
+                                       image=self.image,
+                                       size=self.size,
+                                       ex_metadata=self.metadata)
 
         return node
 
     def get_node(self):
-        nodes = self.ssh.driver.list_nodes()
+        nodes = self.driver.list_nodes()
         if not nodes:
             raise Exception("No instance found")
-        if self.ssh.env.get('INSTANCE_ID'):
+        if self.ssh_vars.instance_id:
             for node in nodes:
-                if node.id == self.ssh.env['INSTANCE_ID']:
+                if node.id == self.ssh_vars.instance_id:
                     return node
             raise Exception("No instance found")
         else:
             raise Exception("No instance ID registered")
 
+    def start_instance(self):
+        self.start_instance_no_arg()
+
+    def stop_instance(self):
+        self.stop_instance_no_arg()
+
+    def terminate_instance(self):
+        self.terminate_instance_no_arg()
+
+    def display_instances(self):
+        self.display_instances_no_arg()
+
     def _init_rsa_key_pair(self):
         self.create_local_rsa_key_pair()
 
+    def spe_wait_until_running(self, nodes):
+        return self.driver.wait_until_running(nodes=nodes)[0]
+
     def _init_size(self):
-        sizes = self.ssh.driver.list_sizes()
-        selected_sizes = [s for s in sizes if self.ssh.env["INSTANCE_TYPE"] in s.name]
+        sizes = self.driver.list_sizes()
+        selected_sizes = [s for s in sizes if self.ssh_vars.gcp.size in s.name]
         if not selected_sizes:
-            raise Exception(self.ssh.env['INSTANCE_TYPE'] + " is not available in AWS")
+            raise Exception(self.ssh_vars.gcp.size + " is not available in GCP")
         else:
             self.size = selected_sizes[0]
 
     def _init_image(self):
-        images = self.ssh.driver.list_images()
-        selected_images = [i for i in images if self.ssh.env['IMAGE_NAME'] in i.name]
+        images = self.driver.list_images()
+        selected_images = [i for i in images if self.ssh_vars.gcp.image_name in i.name]
         if not selected_images:
-            raise Exception(self.ssh.env['IMAGE_ID'] + " is not available in AWS")
+            raise Exception(self.ssh_vars.gcp.image_name + " is not available in GCP")
         else:
             self.image = selected_images[0]
 
@@ -344,18 +582,18 @@ class SpecificGPC(ProviderSpecific):
             "items": [
                 {
                     "key": "ssh-keys",
-                    "value": "antoinebourayne:" + get_public_key(self.ssh.env['USERNAME'])
+                    "value": "antoinebourayne:" + get_public_key(self.ssh_vars.username)
                 }
             ]
         }
 
 
-def get_provider_specific_driver(ssh: SSHCrossCloud):
-    if ssh.env['PROVIDER'] == 'AWS':
-        return SpecificAWS(ssh)
+def get_provider_specific_driver(ssh_vars: utils.SSHVar):
+    if ssh_vars.provider == 'aws':
+        return SpecificAWS(ssh_vars)
 
-    if ssh.env['PROVIDER'] == 'AZURE':
-        return SpecificAzure(ssh)
+    if ssh_vars.provider == 'azure':
+        return SpecificAzure(ssh_vars)
 
-    if ssh.env['PROVIDER'] == 'GCP':
-        return SpecificGPC(ssh)
+    if ssh_vars.provider == 'gcp':
+        return SpecificGPC(ssh_vars)

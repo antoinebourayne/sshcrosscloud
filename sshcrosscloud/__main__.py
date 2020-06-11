@@ -1,12 +1,7 @@
-import subprocess
-import time
-import logging
-import coloredlogs
-from sshcrosscloud.ssh_cross_cloud import SSHCrossCloud
-import os
 import sys
+
+from sshcrosscloud.ssh_cross_cloud import SSHCrossCloud
 from argparse import ArgumentParser
-from sshcrosscloud.libcloud_extended import get_provider_specific_driver, ProviderSpecific
 import sshcrosscloud.utils as utils
 
 """
@@ -41,513 +36,51 @@ parser.add_argument('-L', default=None, const=None)
 parser.add_argument('-R', default=None, const=None)
 parser.add_argument('-i', default=None, const=None)
 
-args = parser.parse_args()
-arg_dict = vars(args)
-
 
 # MAIN
 def main():
-    pre_env = os.environ
+    print('-----SSH CROSS CLOUD-----')
 
-    # SSH Script
-    if parser.parse_args().sshscript:
-        pre_env["SSH_SCRIPT"] = args.sshscript
-
-    # Arguments
-    if args.leave:
-        arg_leave(pre_env)
-
-    if args.stop:
-        arg_stop(pre_env)
-
-    if args.terminate:
-        arg_terminate(pre_env)
-
-    if args.detach:
-        arg_detach(pre_env)
-
-    if args.attach:
-        arg_attach(pre_env)
-
-    if args.finish:
-        arg_finish(pre_env)
-
-    if args.verbose:
-        arg_verbose(pre_env)
-
-    if args.norsync:
-        arg_no_rsync(pre_env)
-
-    if args.provider:
-        arg_provider(pre_env, args.provider)
-
-    if args.L:
-        arg_L(pre_env, args.L)
-
-    if args.R:
-        arg_R(pre_env, args.R)
-
-    if args.i:
-        arg_i(pre_env, args.i)
-
-    if args.v:
-        arg_v()
-
-    if args.debug:
-        arg_debug(pre_env)
-
-    if args.config:
-        arg_config(pre_env)
-
-    if args.status:
-        arg_status(pre_env)
-
-    if args.destroy:
-        arg_destroy(pre_env)
-
-    """-----------------Here call methods---------------------"""
-    logging.info('-----SSH CROSS CLOUD-----')
+    # Variable Initialization
+    ssh_vars = utils.SSHVar(vars(parser.parse_args()))
 
     # SSH Object
-    ssh = SSHCrossCloud(pre_env, arg_dict)
+    ssh = SSHCrossCloud(ssh_vars)
 
-    # Specific Driver
-    spe_driver = get_provider_specific_driver(ssh)
+    # Manage credentials
+    ssh.spe_driver.write_credentials(utils.get_ui_credentials(ssh))
 
-    # If no instance found, create one
-    # TODO: make a def ?
-    if not ssh.env.get("INSTANCE_ID"):
-        if wait_for_public_ip(ssh, spe_driver.create_instance()) != 0:
-            raise Exception("Could not create instance")
-    elif ssh.env.get("INSTANCE_STATE") == "unknown":
-        raise Exception("Instance stopping or shutting down, please try again later")
-    elif ssh.env.get("INSTANCE_STATE") == "stopped":
-        if start_instance(ssh) != 0:
-            raise Exception("Could not start instance")
-        wait_for_public_ip(ssh, spe_driver.get_node())
+    # Init libcloud driver, specific driver and get existing instance if it exists
+    ssh.init_provider_specifics()
+
+    # TODO: where to put this ?
+    ssh.spe_driver.ssh_vars = ssh.ssh_vars
+    ssh.spe_driver.driver = ssh.driver
+
+    # Have a look at the existing instances
+    ssh.spe_driver.display_instances()
+
+    # Fetch existing instance or create one
+    ssh.manage_instance()
 
     # Try to connect multiple times to the instance to check the connection
-    connection_result = wait_until_initialization(ssh)
+    ssh.wait_until_initialization()
 
-    if connection_result == 0:
-        pass
-        # Copy directory from local computer to instance
-        rsync_to_instance(ssh)
+    # Copy directory from local computer to instance
+    ssh.rsync_to_instance()
 
-        # SSH connection to instance
-        attach_to_instance(ssh)
+    # SSH connection to instance
+    ssh.attach_to_instance()
 
-        # When done synchronize back to local directory
-        rsync_back_to_local(ssh)
+    # When done synchronize back to local directory
+    ssh.rsync_back_to_local()
 
-        # How to finish process
-        finish_action(ssh)
+    # How to finish process
+    ssh.finish_action()
 
-    logging.info('SSH CROSS CLOUD - END')
-    """-------------------------------------------------------"""
-    return 0
-
-
-def guide_credentials(provider: str):
-    if provider == 'AWS':
-        guide = utils.guide_aws
-    elif provider == 'AZURE':
-        guide = utils.guide_azure
-    elif provider == 'GCP':
-        guide = utils.guide_gcp
-    else:
-        guide = "No guide for this provider"
-
-    logging.info(guide)
-
-
-# Arguments methods
-def arg_leave(pre_env):
-    pre_env["FINAL_STATE"] = "leave"
-
-
-def arg_stop(pre_env):
-    if pre_env.get("SSH_DETACH") != "y" and pre_env.get("SSH_ATTACH") != "y":
-        pre_env["FINAL_STATE"] = "stop"
-
-
-def arg_terminate(pre_env):
-    if pre_env.get("SSH_DETACH") != "y" and pre_env.get("SSH_ATTACH") != "y":
-        pre_env["FINAL_STATE"] = "terminate"
-
-
-def arg_detach(pre_env):
-    pre_env["FINAL_STATE"] = "leave"
-    pre_env["SSH_DETACH"] = "y"
-    pre_env["MULTIPLEX"] = "y"
-
-
-def arg_attach(pre_env):
-    pre_env["MULTIPLEX"] = "y"
-    pre_env["SSH_ATTACH"] = "y"
-    pre_env["FINAL_STATE"] = "leave"
-    pre_env["NO_RSYNC_BEGIN"] = "y"
-    pre_env["NO_RSYNC_END"] = "y"
-
-
-def arg_finish(pre_env):
-    pre_env["NO_RSYNC_BEGIN"] = "y"
-
-
-def arg_config(pre_env):
-    # guide_credentials(pre_env["PROVIDER"])
-    pre_env["CONFIG"] = "y"
-
-
-def arg_destroy(pre_env):
-    pre_env["NO_RSYNC_BEGIN"] = "y"
-    pre_env["NO_RSYNC_END"] = "y"
-    pre_env["NO_ATTACH"] = "y"
-    pre_env["FINAL_STATE"] = "terminate"
-
-
-def arg_provider(pre_env, arg: str):
-    pre_env['PROVIDER'] = arg.upper()
-
-
-def arg_debug(pre_env):
-    pre_env['DEBUG'] = "y"
-
-
-def arg_L(pre_env, arg):
-    if pre_env.get('SSH_PARAMS'):
-        pre_env["SSH_PARAMS"] = pre_env["SSH_PARAMS"] + " -L " + arg
-    else:
-        pre_env["SSH_PARAMS"] = " -L " + arg
-
-
-def arg_R(pre_env, arg):
-    if pre_env.get('SSH_PARAMS'):
-        pre_env["SSH_PARAMS"] = pre_env["SSH_PARAMS"] + " -R " + arg
-    else:
-        pre_env["SSH_PARAMS"] = " -R " + arg
-
-
-def arg_i(pre_env, arg):
-    pre_env["PEM_SSH"] = "-i " + arg
-
-
-def arg_v():
-    logging.getLogger().setLevel(logging.INFO)
-    coloredlogs.install(level='INFO')
-
-
-def arg_no_rsync(pre_env):
-    pre_env['NO_RSYNC_BEGIN'] = "y"
-    pre_env['NO_RSYNC_END'] = "y"
-
-
-def arg_verbose(pre_env):
-    pre_env['RSYNC_VERBOSE'] = "y"
-
-
-def arg_help():
-    help_text = utils.help_text
-    logging.info(help_text)
-    sys.exit(0)
-
-
-def arg_status(pre_env):
-    ssh = SSHCrossCloud(pre_env, arg_dict)
-    display_instances(ssh)
-    sys.exit(0)
-
-
-def display_instances(ssh: SSHCrossCloud):
-    if ssh.env['PROVIDER'] == "AZURE":
-        nodes = ssh.driver.list_nodes(ssh.env['AZ_RESOURCE_GROUP'])
-    else:
-        nodes = ssh.driver.list_nodes()
-
-    if not nodes:
-        logging.info("No instance running")
-        sys.exit(0)
-
-    logging.info("------------------------------------------------------")
-    for node in nodes:
-        logging.info(node)
-
-    logging.info("------------------------------------------------------")
-
-
-def wait_until_initialization(ssh: SSHCrossCloud):
-    """
-    Tries to SSH the instance multiple times until it is initialized
-    :param ssh:
-    :return:0 if OK 1 if error 2 if no instance
-    """
-    logging.info("Waiting for instance initialization...")
-    i = 0
-
-    # Try to connect to instance for a few times
-    while i < 10:
-        logging.info("Trying to connect... (" + str(i + 1) + ")")
-        try:
-            # Works like a ping to know if ssh is ok
-
-            if ssh.env.get('DEBUG'):
-                ssh_return = "ssh " + ssh.env['DISABLE_HOST_CHECKING'] + " -v " + ssh.env['PEM_SSH'] + " " + ssh.env[
-                    'INSTANCE_USER'] + "@" + \
-                             ssh.env['PUBLIC_IP'] + " exit && echo $?"
-            else:
-                ssh_return = "ssh " + ssh.env['DISABLE_HOST_CHECKING'] + " " + ssh.env['PEM_SSH'] + " " + ssh.env[
-                    'INSTANCE_USER'] + "@" + \
-                             ssh.env['PUBLIC_IP'] + " exit && echo $?"
-
-            output_test = subprocess.check_output(ssh_return, shell=True)
-            # TODO: raise exception if output not good
-            logging.info("Instance is available")
-
-            return 0
-
-        except subprocess.CalledProcessError as e:
-            logging.info("Instance is not yet available")
-
-        time.sleep(5)
-        i += 1
-
-    raise Exception("Could not connect to instance, please try later")
-
-
-def wait_for_public_ip(ssh: SSHCrossCloud, node):
-    logging.info("Initializating instance...")
-    nodes = [node]
-
-    # Azure needs a specified resource group
-    if ssh.env['PROVIDER'] == "AZURE":
-        list_node_args = {'ex_resource_group': 'NetworkWatcherRG'}
-        retour = ssh.driver.wait_until_running(nodes=nodes, ex_list_nodes_kwargs=list_node_args)[0]
-    else:
-        retour = ssh.driver.wait_until_running(nodes=nodes)[0]
-
-    # retour[0] : (wait_until_running) returns a tuple [(Node, ip_addresses)]
-    if not retour[0].public_ips:
-        logging.warning("No public IP available")
-        return 1
-
-    ssh.env['INSTANCE_ID'] = retour[0].id
-    ssh.env['PUBLIC_IP'] = retour[0].public_ips[0]
+    print('SSH CROSS CLOUD - END')
 
     return 0
-
-
-def attach_to_instance(ssh: SSHCrossCloud):
-    """
-    Open SSH terminal to instance and launch multiplex session if needed
-    :param ssh:
-    :return: 0 if SSH connection succeeded, 1 if not
-    """
-    if not ssh.env['NO_ATTACH']:
-
-        ssh_params = ""
-
-        if ssh.env.get('SSH_PARAMS'):
-            ssh_params = ssh.env['SSH_PARAMS']
-        if ssh.env.get('DEBUG'):
-            ssh_params = ssh_params + " -v"
-
-        ssh_command = "ssh " + ssh.env['DISABLE_HOST_CHECKING'] + ssh_params + " " + ssh.env['PEM_SSH'] + " " \
-                      + ssh.env['INSTANCE_USER'] + "@" + ssh.env['PUBLIC_IP'] + " "
-
-        if not ssh.env.get('MULTIPLEX'):
-            if ssh.env.get('SSH_SCRIPT'):
-                logging.info("ssh script : " + ssh_command + ssh.env['SSH_SCRIPT'])
-                os.system(ssh_command + ssh.env['SSH_SCRIPT'])
-            else:
-                logging.info("no ssh script : " + ssh_command)
-                os.system(ssh_command)
-            return 0
-        else:
-            if ssh.env.get('SSH_DETACH'):
-                if ssh.env.get('SSH_SCRIPT'):
-                    multiplex_command = ssh_command + " -t 'tmux has-session -t " + ssh.env['INSTANCE_NAME'] \
-                                        + " || tmux new-session -s " + ssh.env['INSTANCE_NAME'] + " -d" \
-                                        + ' "' + ssh.env['SSH_SCRIPT'] + '"' + "'"
-                else:
-                    multiplex_command = ssh_command + " -t 'tmux has-session -t " + ssh.env['INSTANCE_NAME'] \
-                                        + " || tmux new-session -s " + ssh.env['INSTANCE_NAME'] + " -d'"
-
-                logging.info("--detach : " + multiplex_command)
-                os.system(multiplex_command)
-
-                return 0
-
-            elif ssh.env.get('SSH_ATTACH'):
-                # ssh arg "-t" forces to allocate a terminal, does not not otherwise
-                if ssh.env.get('SSH_SCRIPT'):
-                    multiplex_command = ssh_command + " -t 'tmux attach-session -t " + ssh.env['INSTANCE_NAME'] \
-                                        + " || tmux new-session -s " + ssh.env['INSTANCE_NAME'] \
-                                        + ' "' + ssh.env['SSH_SCRIPT'] + '"' + "'"
-                else:
-                    multiplex_command = ssh_command + " -t 'tmux attach-session -t " + ssh.env['INSTANCE_NAME'] \
-                                        + " || tmux new-session -s " + ssh.env['INSTANCE_NAME'] + "'"
-
-                logging.info("--attach : " + multiplex_command)
-                os.system(multiplex_command)
-
-                return 0
-
-
-def finish_action(ssh: SSHCrossCloud):
-    """
-    Terminates, destroys or leaves instances depending on the FINAL_STATE
-    :param ssh:
-    :return:0 if OK 1 if error
-    """
-
-    if ssh.env["FINAL_STATE"] == "leave":
-        logging.warning("Your instance is still alive")
-        sys.exit(0)
-
-    if ssh.env.get("DEBUG") == "y":
-        logging.warning("Instance final state : " + ssh.env["FINAL_STATE"])
-        sys.exit(0)
-
-    if ssh.nbOfSshConnections < 2:
-
-        if ssh.env["FINAL_STATE"] == "stop":
-            logging.warning("Stopping instances...")
-            stop_instance(ssh)
-
-        elif ssh.env["FINAL_STATE"] == "terminate":
-            logging.warning("Terminating instances...")
-            terminate_instance(ssh)
-
-        else:
-            if ssh.nbOfSshConnections > 1:
-                ssh.env['FINAL_STATE'] = "leave"
-                logging.warning("Another connection to EC2 instance is alive. The AWS EC2 instance is active")
-            else:
-                logging.warning("The AWS EC instance " + ssh.env['INSTANCE_NAME'] + " is alive")
-
-
-def stop_instance(ssh: SSHCrossCloud):
-    """
-    Stops all owner's instances
-    :param ssh:
-    :return:
-    """
-    if ssh.env['PROVIDER'] == "AZURE":
-        nodes = ssh.driver.list_nodes(ssh.env['AZ_RESOURCE_GROUP'])
-    else:
-        nodes = ssh.driver.list_nodes()
-
-    if not nodes:
-        logging.info("No instance running")
-
-    for node in nodes:
-        if node.id == ssh.env['INSTANCE_ID'] and node.state != "terminated":
-            terminate = ssh.driver.ex_stop_node(node)
-            if terminate:
-                logging.warning("Stopped : " + node.id)
-                return 0
-            else:
-                logging.warning("An error has occurred while terminating")
-                return 1
-
-
-def start_instance(ssh: SSHCrossCloud):
-    """
-    Starts a stopped instance
-    :param ssh:
-    :return:
-    """
-    if ssh.env['PROVIDER'] == "AZURE":
-        nodes = ssh.driver.list_nodes(ssh.env['AZ_RESOURCE_GROUP'])
-    else:
-        nodes = ssh.driver.list_nodes()
-
-    if not nodes:
-        logging.info("No instance running")
-
-    for node in nodes:
-        if node.id == ssh.env['INSTANCE_ID'] and node.state == "stopped":
-            start = ssh.driver.ex_start_node(node)
-            if start:
-                logging.info("Started : " + node.id)
-                return 0
-            else:
-                logging.warning("An error has occurred while terminating")
-                return 1
-
-
-def terminate_instance(ssh: SSHCrossCloud):
-    """
-    Terminates all owner's instances
-    :param ssh:
-    :return:
-    """
-    if ssh.env['PROVIDER'] == "AZURE":
-        nodes = ssh.driver.list_nodes(ssh.env['AZ_RESOURCE_GROUP'])
-    else:
-        nodes = ssh.driver.list_nodes()
-
-    for node in nodes:
-        if node.id == ssh.env['INSTANCE_ID'] and node.state != "terminated":
-            if ssh.env['PROVIDER'] == 'AZURE':
-                stop = ssh.driver.destroy_node(node=node, ex_destroy_vhd=True, ex_destroy_nic=False)
-                volumes = ssh.driver.list_volumes(ex_resource_group=ssh.env['AZ_RESOURCE_GROUP'])
-                volume = [v for v in volumes if "sshcrosscloud" in v.name][0]
-                delete_volume = ssh.driver.destroy_volume(volume)
-            else:
-                stop = ssh.driver.destroy_node(node=node)
-            if stop:
-                logging.warning("Terminated : " + node.id)
-                return 0
-            else:
-                logging.warning("An error has occurred while stopping")
-                return 1
-
-
-def rsync_to_instance(ssh: SSHCrossCloud):
-    """
-    Using rsync in command line to sync local directory to instance
-    :param ssh:
-    :return:
-    """
-    if ssh.env.get('NO_RSYNC_BEGIN'):
-        logging.info("No rsync to instance")
-    else:
-        logging.info("Synchronizing local directory to instance")
-        if ssh.env.get('RSYNC_VERBOSE'):
-            command = "rsync -Pav -e 'ssh " + ssh.env['DISABLE_HOST_CHECKING'] + " " + ssh.env[
-                'PEM_SSH'] + "'" + " --exclude-from='.rsyncignore' $HOME/* " + \
-                      ssh.env['INSTANCE_USER'] + "@" + ssh.env['PUBLIC_IP'] + ":/home/" + ssh.env['INSTANCE_USER']
-        else:
-            command = "rsync -Pa -e 'ssh " + ssh.env['DISABLE_HOST_CHECKING'] + " " + ssh.env[
-                'PEM_SSH'] + "'" + " --exclude-from='.rsyncignore' $HOME/* " + \
-                      ssh.env['INSTANCE_USER'] + "@" + ssh.env['PUBLIC_IP'] + ":/home/" + ssh.env['INSTANCE_USER']
-
-        rsync = os.system(command)
-
-
-def rsync_back_to_local(ssh: SSHCrossCloud):
-    """
-    Rsync back
-    :param ssh:
-    :return:
-    """
-    if ssh.env.get('NO_RSYNC_END'):
-        logging.info("No rsync back to local")
-    else:
-        logging.info("Synchronizing directory back to local")
-        if ssh.env.get('RSYNC_VERBOSE'):
-            command = "rsync -vzaP -r -e 'ssh -o StrictHostKeyChecking=no -o LogLevel=quiet " + ssh.env[
-                'PEM_SSH'] + "' " \
-                      + ssh.env['INSTANCE_USER'] + "@" + ssh.env['PUBLIC_IP'] + \
-                      ":/home/" + ssh.env['INSTANCE_USER'] + "/*" + " $HOME"
-        else:
-            command = "rsync -zaP -r -e 'ssh -o StrictHostKeyChecking=no -o LogLevel=quiet " + ssh.env[
-                'PEM_SSH'] + "' " \
-                      + ssh.env['INSTANCE_USER'] + "@" + ssh.env['PUBLIC_IP'] + \
-                      ":/home/" + ssh.env['INSTANCE_USER'] + "/*" + " $HOME"
-
-        rsync = os.system(command)
 
 
 if __name__ == '__main__':
