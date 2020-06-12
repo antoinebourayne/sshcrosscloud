@@ -1,4 +1,7 @@
+import os
 import sys
+
+from dotenv import dotenv_values, find_dotenv
 
 from sshcrosscloud.ssh_cross_cloud import SSHCrossCloud
 from argparse import ArgumentParser
@@ -41,42 +44,39 @@ parser.add_argument('-i', default=None, const=None)
 def main():
     print('-----SSH CROSS CLOUD-----')
 
-    # Variable Initialization
-    ssh_vars = utils.SSHVar(vars(parser.parse_args()))
+    # Initialization
+    command_args = vars(parser.parse_args())
 
-    # SSH Object
-    ssh = SSHCrossCloud(ssh_vars)
+    ssh_vars = utils.SSHVar(command_args)
 
-    # Manage credentials
-    ssh.spe_driver.write_credentials(utils.get_ui_credentials(ssh))
+    ssh = SSHCrossCloud(ssh_vars, dotenv_values(find_dotenv()), os.environ)
 
-    # Init libcloud driver, specific driver and get existing instance if it exists
+    if ssh.ssh_vars.config:
+        ssh.spe_driver.write_credentials(utils.get_ui_credentials(
+            path=ssh.ssh_vars.rsa_key_file_path,
+            credentials_items=ssh.ssh_vars.credentials_items))
+
+    # TODO: try to put this in background
     ssh.init_provider_specifics()
 
-    # TODO: where to put this ?
-    ssh.spe_driver.ssh_vars = ssh.ssh_vars
-    ssh.spe_driver.driver = ssh.driver
-
-    # Have a look at the existing instances
-    ssh.spe_driver.display_instances()
-
-    # Fetch existing instance or create one
-    ssh.manage_instance()
-
-    # Try to connect multiple times to the instance to check the connection
-    ssh.wait_until_initialization()
-
-    # Copy directory from local computer to instance
-    ssh.rsync_to_instance()
-
-    # SSH connection to instance
-    ssh.attach_to_instance()
-
-    # When done synchronize back to local directory
-    ssh.rsync_back_to_local()
-
-    # How to finish process
-    ssh.finish_action()
+    ssh.execute(provider=ssh.ssh_vars.provider,
+                sshscript=ssh.ssh_vars.ssh_script,
+                leave=ssh.ssh_vars.leave,
+                stop=ssh.ssh_vars.stop,
+                terminate=ssh.ssh_vars.terminate,
+                detach=ssh.ssh_vars.detach,
+                attach=ssh.ssh_vars.attach,
+                finish=ssh.ssh_vars.finish,
+                verbose=ssh.ssh_vars.verbose,
+                norsync=ssh.ssh_vars.norsync,
+                l=ssh.ssh_vars.l,
+                r=ssh.ssh_vars.r,
+                i=ssh.ssh_vars.i,
+                v=ssh.ssh_vars.v,
+                debug=ssh.ssh_vars.debug,
+                config=ssh.ssh_vars.config,
+                status=ssh.ssh_vars.status,
+                destroy=ssh.ssh_vars.destroy)
 
     print('SSH CROSS CLOUD - END')
 

@@ -8,9 +8,6 @@ from pathlib import Path
 
 import sshcrosscloud.utils as utils
 from libcloud.compute.base import NodeAuthSSHKey
-from libcloud.compute.drivers.ec2 import BaseEC2NodeDriver
-from libcloud.compute.drivers.azure_arm import AzureNodeDriver
-from libcloud.compute.drivers.gce import GCENodeDriver
 from sshcrosscloud.utils import get_public_key
 
 """
@@ -18,10 +15,6 @@ ProviderSpecific Class
 
 This class is an upgrade of libcloud to simplify the use of SSH CROSS CLOUD
 """
-
-
-# TODO: image id /image name
-# TODO: credentials paths are a mess
 
 class ProviderSpecific(ABC):
     ssh_vars = None
@@ -44,7 +37,6 @@ class ProviderSpecific(ABC):
         pass
 
     @abstractmethod
-    # TODO: put somewhere
     def display_instances(self):
         """
 
@@ -92,6 +84,14 @@ class ProviderSpecific(ABC):
         """
         pass
 
+    @abstractmethod
+    def get_credentials(self):
+        """
+
+        :return:
+        """
+        pass
+
     def write_credentials(self, credentials: dict):
         if not credentials:
             logging.info("Skip writting credentials")
@@ -104,27 +104,25 @@ class ProviderSpecific(ABC):
 
     def create_local_rsa_key_pair(self):
         logging.info("Creating key pair")
-        # TODO: key name not to good and test command
 
-        genrate_key_pair = "ssh-keygen -f " + str(Path.home()) + "/.ssh/" + self.ssh_vars.username
+        genrate_key_pair = "ssh-keygen -f " + self.ssh_vars.rsa_key_file_path
 
-        pub_from_priv = "ssh-keygen -y -f " + str(Path.home()) + "/.ssh/" \
-                        + self.ssh_vars.username + " > " + str(Path.home()) \
-                        + "/.ssh/" + self.ssh_vars.username + ".pub"
+        pub_from_priv = "ssh-keygen -y -f " + self.ssh_vars.rsa_key_file_path \
+                        + " > " + self.ssh_vars.rsa_key_file_path + ".pub"
 
-        if os.path.isfile(str(Path.home()) + "/.ssh/" + self.ssh_vars.username):
-            if os.path.isfile(str(Path.home()) + "/.ssh/" + self.ssh_vars.username + ".pub"):
+        if os.path.isfile(self.ssh_vars.rsa_key_file_path):
+            if os.path.isfile(self.ssh_vars.rsa_key_file_path + ".pub"):
                 logging.info("Key pair already stored")
             else:
                 logging.info(
-                    "Creating key pair from existing key in " + str(Path.home()) + "/.ssh/" + self.ssh_vars.username)
+                    "Creating key pair from existing key in " + self.ssh_vars.rsa_key_file_path)
                 os.system(pub_from_priv)
+                logging.info("Key pair created: " + self.ssh_vars.rsa_key_file_path)
         else:
             os.system(genrate_key_pair)
-            os.chmod(str(Path.home()) + "/.ssh/" + self.ssh_vars.username, stat.S_IRWXU)
+            os.chmod(self.ssh_vars.rsa_key_file_path, stat.S_IRWXU)
+            logging.info("Key pair created : " + self.ssh_vars.rsa_key_file_path)
 
-        if os.path.isfile(str(Path.home()) + "/.ssh/" + self.ssh_vars.username + ".pub"):
-            logging.info("Key pair created")
             return
 
     def display_instances_no_arg(self):
@@ -207,8 +205,8 @@ class SpecificAWS(ProviderSpecific):
         self._init_image()
         self._init_security_group()
 
-        logging.info("Instance parameters : " + self.ssh_vars.instance_name + self.ssh_vars.aws.image_id
-                     + self.ssh_vars.aws.size)
+        logging.info("Instance parameters : " + self.ssh_vars.instance_name + " - " + self.ssh_vars.aws.image_id
+                     + " - " + self.ssh_vars.aws.size)
 
         node = self.driver.create_node(name=self.ssh_vars.instance_name,
                                        image=self.image,  # Need to use Libcloud object, can't use string
@@ -231,6 +229,18 @@ class SpecificAWS(ProviderSpecific):
         else:
             raise Exception("No instance ID registered")
 
+    def get_region(self):
+        if os.path.isfile(self.ssh_vars.aws.config_path):
+
+            config = configparser.ConfigParser()
+            config.read(self.ssh_vars.aws.config_path)
+            aws_region = config['default']['region']
+
+            return aws_region
+        else:
+            raise Exception("No region found in " + self.ssh_vars.aws.config_path
+                            + ", run sshcrosscloud --config -- provider aws")
+
     def start_instance(self):
         self.start_instance_no_arg()
 
@@ -246,31 +256,41 @@ class SpecificAWS(ProviderSpecific):
     def spe_wait_until_running(self, nodes):
         return self.driver.wait_until_running(nodes=nodes)[0]
 
+    def get_credentials(self):
+        if os.path.isfile(self.ssh_vars.credentials_file_path):
+
+            config = configparser.ConfigParser()
+            config.read(self.ssh_vars.credentials_file_path)
+            aws_access_key_id = config['default']['aws_access_key_id']
+            aws_secret_access_key = config['default']['aws_secret_access_key']
+
+            return aws_access_key_id, aws_secret_access_key
+        else:
+            raise Exception("No credentials found in " + self.ssh_vars.credentials_file_path +
+                            ", run sshcrosscloud --config -- provider aws")
+
     def _init_rsa_key_pair(self):
         logging.info("Creating key pair")
 
-        if os.path.isfile(str(Path.home()) + "/.ssh/" + self.ssh_vars.username):  # TODO: changer username
+        if os.path.isfile(self.ssh_vars.rsa_key_file_path):
             for key in self.driver.ex_list_keypairs():
                 if self.ssh_vars.username == key['keyName']:
                     logging.info("Key pair already stored")
                     return
 
-            logging.info(
-                "Creating key pair from existing key in " + str(Path.home()) + "/.ssh/" + self.ssh_vars.username)
+            logging.info("Creating key pair from existing key in " + self.ssh_vars.rsa_key_file_path)
             self.driver.import_key_pair_from_file(name=self.ssh_vars.username,
-                                                  key_file_path=str(
-                                                      Path.home()) + "/.ssh/" + self.ssh_vars.username)
+                                                  key_file_path=self.ssh_vars.rsa_key_file_path)
             return
         else:
-            keypair = self.driver.create_key_pair(
-                name=self.ssh_vars.username)  # TODO: vérifier la demande de mdp à l'utilisateur
+            keypair = self.driver.create_key_pair(name=self.ssh_vars.username)  # TODO: ask password to user ?
             rsa_key = keypair.private_key
 
-            with open(str(Path.home()) + "/.ssh/" + self.ssh_vars.username, 'w') as file:
+            with open(self.ssh_vars.rsa_key_file_path, 'w') as file:
                 file.write(rsa_key)
-            os.chmod(str(Path.home()) + "/.ssh/" + self.ssh_vars.username, stat.S_IRWXU)
+            os.chmod(self.ssh_vars.rsa_key_file_path, stat.S_IRWXU)
 
-            logging.info("Key pair created")  # TODO: informer l'utilisateur du nom de la clé créée
+            logging.info("Key pair created : " + self.ssh_vars.rsa_key_file_path)
 
     def _init_size(self):
         sizes = self.driver.list_sizes()
@@ -289,7 +309,7 @@ class SpecificAWS(ProviderSpecific):
             self.image = selected_images[0]
 
     def _init_security_group(self):
-        # TODO: separated UI
+        # TODO: separated UI ?
         group_names = [self.ssh_vars.aws.security_group]
         security_groups = self.driver.ex_get_security_groups(group_names=group_names)
         if not security_groups:
@@ -357,6 +377,21 @@ class SpecificAzure(ProviderSpecific):
             raise Exception("No instance found")
         else:
             raise Exception("No instance ID registered")
+
+    def get_credentials(self):
+        if os.path.isfile(self.ssh_vars.credentials_file_path):
+
+            config = configparser.ConfigParser()
+            config.read(self.ssh_vars.credentials_file_path)
+            tenant_id = config['default']['tenant']
+            subscription_id = config['default']['subscription_id']
+            client_id = config['default']['client_id']
+            secret = config['default']['secret']
+
+            return tenant_id, subscription_id, client_id, secret
+        else:
+            raise Exception(
+                "No credentials found in " + self.ssh_vars.credentials_file_path + ", run sshcrosscloud --config -- provider azure")
 
     def start_instance(self) -> None:
         nodes = self.driver.list_nodes(self.ssh_vars.azure.resource_group)
@@ -454,7 +489,7 @@ class SpecificAzure(ProviderSpecific):
 
     def _init_auth(self):
         # Libcloud does not allow key vault for Azure, therefore need to store public key locally
-        self.auth = NodeAuthSSHKey(get_public_key(self.ssh_vars.username))  # TODO: idem not username for key
+        self.auth = NodeAuthSSHKey(get_public_key(self.ssh_vars.rsa_key_file_path))
 
     def _init_virtual_network(self):
         if not self.driver.ex_list_networks():
@@ -470,7 +505,7 @@ class SpecificAzure(ProviderSpecific):
                 self.driver.ex_list_network_security_groups(resource_group=self.resource_group.name)[0]
 
     def _init_public_ip(self):
-        # TODO: separated UI
+        # TODO: separated UI ?
         pips = self.driver.ex_list_public_ips(resource_group=self.resource_group.name)
         selected_pips = [ip for ip in pips if ip.name == self.ssh_vars.azure.public_ip_name]
         if not selected_pips:
@@ -520,8 +555,8 @@ class SpecificGPC(ProviderSpecific):
         self._init_size()
         self._init_metadata()
 
-        logging.info("Instance parameters : " + self.ssh_vars.instance_name + self.image.name
-                     + self.size.name)
+        logging.info("Instance parameters : " + self.ssh_vars.instance_name + " - " + self.image.name
+                     + " - " + self.size.name)
 
         node = self.driver.create_node(name=self.ssh_vars.instance_name,
                                        image=self.image,
@@ -541,6 +576,21 @@ class SpecificGPC(ProviderSpecific):
             raise Exception("No instance found")
         else:
             raise Exception("No instance ID registered")
+
+    def get_credentials(self):
+        # TODO: different method : json https://cloud.google.com/docs/authentication/production?hl=fr#auth-cloud-explicit-python
+        if os.path.isfile(self.ssh_vars.credentials_file_path):
+            config = configparser.ConfigParser()
+            config.read(self.ssh_vars.credentials_file_path)
+            user_id = config['default']['user_id']
+            key = config['default']['key']
+            project = config['default']['project']
+            datacenter = config['default']['datacenter']
+
+            return user_id, key, project, datacenter
+        else:
+            raise Exception(
+                "No credentials found in " + self.ssh_vars.credentials_file_path + ", run sshcrosscloud --config -- provider gcp")
 
     def start_instance(self):
         self.start_instance_no_arg()

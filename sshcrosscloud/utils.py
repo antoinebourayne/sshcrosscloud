@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 from pathlib import Path
 import coloredlogs
 
@@ -84,13 +85,32 @@ class SSHVar:
 
         self.arg_dict = arg_dict
 
+        # Parser Commands
+        self.provider = arg_dict.get('provider')
+        self.ssh_script = arg_dict.get('sshscript')
+        self.leave = arg_dict.get('leave')
+        self.stop = arg_dict.get('stop')
+        self.terminate = arg_dict.get('terminate')
+        self.detach = arg_dict.get('detach')
+        self.attach = arg_dict.get('attach')
+        self.finish = arg_dict.get('finish')
+        self.verbose = arg_dict.get('verbose')
+        self.norsync = arg_dict.get('norsync')
+        self.l = arg_dict.get('l')
+        self.r = arg_dict.get('r')
+        self.i = arg_dict.get('i')
+        self.v = arg_dict.get('v')
+        self.debug = arg_dict.get('debug')
+        self.config = arg_dict.get('config')
+        self.status = arg_dict.get('status')
+        self.destroy = arg_dict.get('destroy')
+
         # Fonctional Variables
-        self.ssh_script = None
         self.polygram = None
         self.username = None
-        self.provider = None
-        self.ssh_params = None
+        self.ssh_params = ""
         self.pem_ssh = None
+        self.display_nodes = True
         self.provider_dict = None
         self.ssh_detach = False
         self.ssh_attach = False
@@ -110,6 +130,8 @@ class SSHVar:
         self.instance_user = None
         self.credentials_file_path = None
         self.instance_spec_arg = None
+        self.rsa_key_file_path = None
+        self.rsa_key_name = None
         self.status_mode = False
         self.credentials_items = []
         self.final_state = "terminate"
@@ -140,6 +162,7 @@ class SSHVar:
         self.aws.image_id = 'ami-0e342d72b12109f91'
         self.aws.image_name = 'ubuntu'
         self.aws.credentials_path = str(Path.home()) + "/.aws/credentials"
+        self.aws.config_path = str(Path.home()) + "/.aws/config"
         self.aws.credentials_items = ['aws_access_key_id', 'aws_secret_access_key']
 
         # Azure Variables
@@ -173,115 +196,38 @@ class SSHVar:
         self.gcp.credentials_path = str(Path.home()) + "/.gcp/credentials"
         self.gcp.credentials_items = ['user_id', 'key', 'project', 'datacenter']
 
-        self._init_commands()
-
-    def _init_commands(self):
-        # TODO: here implement check_params from sshcrosscloud class
-        # SSH Script
-        if self.arg_dict.get('sshscript'):
-            self.ssh_script = self.arg_dict.get('sshscript')
-
-        # Arguments
-        if self.arg_dict['leave']:
-            self.final_state = "leave"
-
-        if self.arg_dict['stop']:
-            self.final_state = "stop"
-
-        if self.arg_dict['terminate']:
-            self.final_state = "terminate"
-
-        if self.arg_dict['detach']:
-            self.final_state = "leave"
-            self.ssh_detach = True
-            self.multiplex = True
-
-        if self.arg_dict['attach']:
-            self.final_state = "leave"
-            self.ssh_attach = True
-            self.multiplex = True
-            self.no_rsync_begin = True
-            self.no_rsync_end = True
-
-        if self.arg_dict['finish']:
-            self.no_rsync_begin = True
-
-        if self.arg_dict['verbose']:
-            self.rsync_verbose = True
-
-        if self.arg_dict['norsync']:
-            self.no_rsync_begin = True
-            self.no_rsync_end = True
-
-        if self.arg_dict['provider']:
-            self.provider = self.arg_dict['provider']
-
-        if self.arg_dict['L']:
-            self.ssh_params = self.ssh_params + " -L " + self.arg_dict['L']
-
-        if self.arg_dict['R']:
-            self.ssh_params = self.ssh_params + " -R " + self.arg_dict['L']
-
-        if self.arg_dict['i']:
-            self.pem_ssh = "-i" + self.arg_dict['i']
-
-        if self.arg_dict['v']:
-            logging.getLogger().setLevel(logging.INFO)
-            coloredlogs.install(level='INFO')
-
-        if self.arg_dict['debug']:
-            self.debug = True
-
-        if self.arg_dict['config']:
-            self.config = True
-
-        if self.arg_dict['status']:
-            self.status_mode = True
-            self.no_rsync_begin = True
-            self.no_rsync_end = True
-            self.no_attach = True
-            self.no_wait_until_init = True
-
-        if self.arg_dict['destroy']:
-            self.no_rsync_begin = True
-            self.no_rsync_end = True
-            self.no_attach = True
-            self.final_state = "terminate"
-
 
 def get_string_from_file(filepath):
     with open(filepath, 'r') as userdatafile:
         return userdatafile.read()
 
 
-def get_public_key(name: str) -> str:
-    if os.path.isfile(str(Path.home()) + "/.ssh/" + name + ".pub"):
-        with open(str(Path.home()) + "/.ssh/" + name + ".pub", 'r') as file:
+def get_public_key(private_key_path: str) -> str:
+    if os.path.isfile(private_key_path + ".pub"):
+        with open(private_key_path + ".pub", 'r') as file:
             rsa_pub = file.read()
         return rsa_pub
     else:
-        raise Exception(str(Path.home()) + "/.ssh/" + name + ".pub " + "not found, add --config to create one")
+        raise Exception(private_key_path + ".pub not found, add --config to create one")
 
 
-def get_ui_credentials(ssh):
-    if ssh.ssh_vars.config:
-        default_credentials_path = str(Path.home()) + "/." + ssh.ssh_vars.provider + "/credentials"
-        if os.path.isfile(default_credentials_path):
-            with open(default_credentials_path, 'r+') as file:
-                file_data = file.read()
-                if file_data:
-                    logging.info("Credentials have already been saved, would you like to change them? y/n")
-                    answer = input()
-                    if answer == 'y':
-                        list_of_credentials = {}
-                        for i in ssh.ssh_vars.credentials_items:
-                            print("Enter" + i + ":")
-                            input_credential = input()
-                            list_of_credentials[i] = input_credential
-
-                        return list_of_credentials
-                    else:
-                        logging.info("Credentials have not been changed")
-                        return
+def get_ui_credentials(path: str, credentials_items: list):
+    if os.path.isfile(path):
+        with open(path, 'r+') as file:
+            file_data = file.read()
+            if file_data:
+                print("Credentials have already been saved, would you like to change them? y/n")
+                answer = input()
+                if answer == 'y':
+                    print("teub")
+                    list_of_credentials = {}
+                    for i in credentials_items:
+                        print("Enter" + i + ":")
+                        input_credential = input()
+                        list_of_credentials[i] = input_credential
+                    return list_of_credentials
+                else:
+                    logging.info("Credentials have not been changed")
+                    return
 
     return
