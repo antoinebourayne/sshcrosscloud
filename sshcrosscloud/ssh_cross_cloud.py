@@ -1,6 +1,5 @@
 import os
 import getpass as gt
-import subprocess
 import time
 import getpass
 
@@ -9,6 +8,7 @@ from libcloud.compute.providers import get_driver
 from libcloud.compute.types import Provider
 import logging
 
+from sshcrosscloud import utils
 from sshcrosscloud.libcloud_extended import get_provider_specific_driver
 from sshcrosscloud.utils import get_string_from_file, SSHVar
 
@@ -19,10 +19,11 @@ Basically contains all the attributes to create an instance on multiple provider
 """
 
 
+# TODO: put try/catch when needed
 class SSHCrossCloud:
-    def __init__(self, ssh_vars: SSHVar, dotenv, env):
+    def __init__(self, ssh_var, dotenv, env):
         self.driver = None
-        self.ssh_vars = ssh_vars
+        self.ssh_vars = ssh_var
 
         # dotenv values are taken form .env file
         self._init_env(dotenv, env)
@@ -71,10 +72,6 @@ class SSHCrossCloud:
         if not self.ssh_vars.rsa_key_file_path:
             self.ssh_vars.rsa_key_file_path = os.path.expanduser('~') + "/.ssh/" + self.ssh_vars.rsa_key_name
 
-        # TODO: take care of this
-        # if not self.env.get('AWS_RSYNC_DIR'):
-        #     self.env['AWS_RSYNC_DIR'] = os.getcwd()
-
         if not self.ssh_vars.pem_ssh:
             self.ssh_vars.pem_ssh = "-i " + self.ssh_vars.rsa_key_file_path
 
@@ -95,7 +92,6 @@ class SSHCrossCloud:
             self.ssh_vars.credentials_file_path = self.ssh_vars.gcp.credentials_path
 
     def init_provider_specifics(self):
-        # TODO: make something prettier
         """
         AWS EC2  : AWS
         Azure VM : AZURE
@@ -168,9 +164,8 @@ class SSHCrossCloud:
                 raise Exception("Provider not supported")
 
             for node in nodes:
-                # TODO: manage other states (ex: shutting down)
                 if node.name == self.ssh_vars.instance_name and node.state not in ["terminated"]:
-                    self.ssh_vars.instance_id = node.id
+                    self.ssh_vars.sshcrosscloud_instance_id = node.id
                     self.ssh_vars.instance_state = node.state
                     self.ssh_vars.public_ip = node.public_ips[0]
 
@@ -198,17 +193,20 @@ class SSHCrossCloud:
                                  self.ssh_vars.instance_user + "@" + self.ssh_vars.public_ip + " exit && echo $?"
 
                 return_code = os.system(ssh_return)
-                if return_code != 0:
+                if return_code == 0:
+                    logging.info("Instance is available")
+                    return
+                elif return_code == 65280:
+                    logging.info("Instance is not yet available")
+                    time.sleep(5)
+                    i += 1
+                else:
                     raise Exception("An error has occured while executing ssh whith code : " + str(return_code))
-                logging.info("Instance is available")
-                return
-            except subprocess.CalledProcessError:
-                logging.info("Instance is not yet available")
-            time.sleep(5)
-            i += 1
-        raise Exception("Could not connect to instance, please try later")
 
-    def wait_for_public_ip(self, with_instance) -> None:
+            except Exception as e:
+                raise Exception(e)
+
+    def init_instance(self, with_instance) -> None:
         logging.info("Initializating instance...")
 
         if with_instance:
@@ -224,22 +222,23 @@ class SSHCrossCloud:
         if not return_node[0].public_ips:
             raise Exception("No public IP available")
 
-        self.ssh_vars.instance_id = return_node[0].id
+        self.ssh_vars.sshcrosscloud_instance_id = return_node[0].id
         self.ssh_vars.public_ip = return_node[0].public_ips[0]
 
         return
 
     def manage_instance(self) -> None:
-        # If no instance found, create one
-        if not self.ssh_vars.instance_id:  # TODO: si jamais deja dans l'env ??
-            if self.wait_for_public_ip(with_instance=False):
-                raise Exception("Could not create instance")
+        if not self.ssh_vars.sshcrosscloud_instance_id:
+            self.init_instance(with_instance=False)
+
         if self.ssh_vars.instance_state == "unknown":
             raise Exception("Instance stopping or shutting down, please try again later")
-        elif self.ssh_vars.instance_state == "stopped":
-            if self.spe_driver.start_instance() != 0:
-                raise Exception("Could not start instance")
-            self.wait_for_public_ip(with_instance=True)
+
+        if self.ssh_vars.instance_state == "stopped":
+            self.spe_driver.start_instance()
+            self.init_instance(with_instance=True)
+
+        return
 
     def attach_to_instance(self) -> None:
         """
@@ -331,16 +330,15 @@ class SSHCrossCloud:
         logging.info("Synchronizing local directory to instance")
         if self.ssh_vars.rsync_verbose:
             command = "rsync -Pav -e 'ssh " + self.ssh_vars.ssh_default_params + " " + self.ssh_vars.pem_ssh \
-                      + "'" + " --exclude-from='.rsyncignore' $HOME/* " + \
+                      + "'" + " --exclude-from='.rsyncignore' " + self.ssh_vars.rsync_directory + "/* " + \
                       self.ssh_vars.instance_user + "@" + self.ssh_vars.public_ip + ":/home/" + self.ssh_vars.instance_user
         else:
             command = "rsync -Pa -e 'ssh " + self.ssh_vars.ssh_default_params + " " + self.ssh_vars.pem_ssh \
-                      + "'" + " --exclude-from='.rsyncignore' $HOME/* " + \
+                      + "'" + " --exclude-from='.rsyncignore' " + self.ssh_vars.rsync_directory + "/* " + \
                       self.ssh_vars.instance_user + "@" + self.ssh_vars.public_ip + ":/home/" + self.ssh_vars.instance_user
         return_code = os.system(command)
         if return_code != 0:
-            raise Exception(
-                "An error has occured while executing rsync to instance whith code : " + str(return_code))
+            raise Exception("An error has occured while executing rsync to instance whith code : " + str(return_code))
 
         return
 
@@ -354,12 +352,12 @@ class SSHCrossCloud:
         if self.ssh_vars.rsync_verbose:
             command = "rsync -vzaP -r -e 'ssh -o StrictHostKeyChecking=no -o LogLevel=quiet " + self.ssh_vars.pem_ssh \
                       + "' " + self.ssh_vars.instance_user + "@" + self.ssh_vars.public_ip + \
-                      ":/home/" + self.ssh_vars.instance_user + "/*" + " $HOME"
+                      ":/home/" + self.ssh_vars.instance_user + "/*" + " " + self.ssh_vars.rsync_directory
         else:
             command = "rsync -zaP -r -e 'ssh -o StrictHostKeyChecking=no -o LogLevel=quiet " + self.ssh_vars.pem_ssh \
                       + "' " \
                       + self.ssh_vars.instance_user + "@" + self.ssh_vars.public_ip + \
-                      ":/home/" + self.ssh_vars.instance_user + "/*" + " $HOME"
+                      ":/home/" + self.ssh_vars.instance_user + "/*" + " " + self.ssh_vars.rsync_directory
         return_code = os.system(command)
         if return_code != 0:
             raise Exception(
@@ -386,7 +384,6 @@ class SSHCrossCloud:
                 config=None,
                 status=None,
                 destroy=None):
-        # TODO: divide this method into submethods ?
 
         # Check that the parameters have only one action and one final state
         if not provider:

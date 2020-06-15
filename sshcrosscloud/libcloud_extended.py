@@ -16,6 +16,7 @@ ProviderSpecific Class
 This class is an upgrade of libcloud to simplify the use of SSH CROSS CLOUD
 """
 
+
 class ProviderSpecific(ABC):
     ssh_vars = None
     driver = None
@@ -103,8 +104,6 @@ class ProviderSpecific(ABC):
             logging.info("Credentials have been saved")
 
     def create_local_rsa_key_pair(self):
-        logging.info("Creating key pair")
-
         genrate_key_pair = "ssh-keygen -f " + self.ssh_vars.rsa_key_file_path
 
         pub_from_priv = "ssh-keygen -y -f " + self.ssh_vars.rsa_key_file_path \
@@ -112,18 +111,23 @@ class ProviderSpecific(ABC):
 
         if os.path.isfile(self.ssh_vars.rsa_key_file_path):
             if os.path.isfile(self.ssh_vars.rsa_key_file_path + ".pub"):
-                logging.info("Key pair already stored")
+                logging.info("Using key pair : " + self.ssh_vars.rsa_key_file_path + ".pub")
             else:
-                logging.info(
-                    "Creating key pair from existing key in " + self.ssh_vars.rsa_key_file_path)
-                os.system(pub_from_priv)
-                logging.info("Key pair created: " + self.ssh_vars.rsa_key_file_path)
-        else:
-            os.system(genrate_key_pair)
-            os.chmod(self.ssh_vars.rsa_key_file_path, stat.S_IRWXU)
-            logging.info("Key pair created : " + self.ssh_vars.rsa_key_file_path)
+                logging.info("Creating key pair from existing key in " + self.ssh_vars.rsa_key_file_path)
+                return_code = os.system(pub_from_priv)
+                if return_code == 0:
+                    logging.info("Public Key created: " + self.ssh_vars.rsa_key_file_path + ".pub")
+                else:
+                    raise Exception("Error while creating public key from private key : " + str(return_code))
 
-            return
+        else:
+            return_code = os.system(genrate_key_pair)
+            if return_code == 0:
+                logging.info("Key pair created : " + self.ssh_vars.rsa_key_file_path)
+                os.chmod(self.ssh_vars.rsa_key_file_path, stat.S_IRWXU)
+                return
+            else:
+                raise Exception("Error while creating key pair : " + str(return_code))
 
     def display_instances_no_arg(self):
         nodes = self.driver.list_nodes()
@@ -140,7 +144,7 @@ class ProviderSpecific(ABC):
             logging.info("No instance running")
 
         for node in nodes:
-            if node.id == self.ssh_vars.instance_id and node.state != "terminated":
+            if node.id == self.ssh_vars.sshcrosscloud_instance_id and node.state != "terminated":
                 terminate = self.driver.ex_stop_node(node)
                 if terminate:
                     logging.warning("Stopped : " + node.id)
@@ -160,7 +164,7 @@ class ProviderSpecific(ABC):
             logging.info("No instance running")
 
         for node in nodes:
-            if node.id == self.ssh_vars.instance_id and node.state == "stopped":
+            if node.id == self.ssh_vars.sshcrosscloud_instance_id and node.state == "stopped":
                 start = self.driver.ex_start_node(node)
                 if start:
                     logging.info("Started : " + node.id)
@@ -177,7 +181,7 @@ class ProviderSpecific(ABC):
         """
         nodes = self.driver.list_nodes()
         for node in nodes:
-            if node.id == self.ssh_vars.instance_id and node.state != "terminated":
+            if node.id == self.ssh_vars.sshcrosscloud_instance_id and node.state != "terminated":
                 if self.ssh_vars.provider == 'AZURE':
                     stop = self.driver.destroy_node(node=node, ex_destroy_vhd=True, ex_destroy_nic=False)
                     volumes = self.driver.list_volumes(ex_resource_group=self.ssh_vars.azure.resource_group)
@@ -221,9 +225,9 @@ class SpecificAWS(ProviderSpecific):
         nodes = self.driver.list_nodes()
         if not nodes:
             raise Exception("No instance found")
-        if self.ssh_vars.instance_id:
+        if self.ssh_vars.sshcrosscloud_instance_id:
             for node in nodes:
-                if node.id == self.ssh_vars.instance_id:
+                if node.id == self.ssh_vars.sshcrosscloud_instance_id:
                     return node
             raise Exception("No instance found")
         else:
@@ -274,16 +278,16 @@ class SpecificAWS(ProviderSpecific):
 
         if os.path.isfile(self.ssh_vars.rsa_key_file_path):
             for key in self.driver.ex_list_keypairs():
-                if self.ssh_vars.username == key['keyName']:
+                if self.ssh_vars.rsa_key_name == key['keyName']:
                     logging.info("Key pair already stored")
                     return
 
             logging.info("Creating key pair from existing key in " + self.ssh_vars.rsa_key_file_path)
-            self.driver.import_key_pair_from_file(name=self.ssh_vars.username,
+            self.driver.import_key_pair_from_file(name=self.ssh_vars.rsa_key_name,
                                                   key_file_path=self.ssh_vars.rsa_key_file_path)
             return
         else:
-            keypair = self.driver.create_key_pair(name=self.ssh_vars.username)  # TODO: ask password to user ?
+            keypair = self.driver.create_key_pair(name=self.ssh_vars.rsa_key_name)  # TODO: ask password to user ?
             rsa_key = keypair.private_key
 
             with open(self.ssh_vars.rsa_key_file_path, 'w') as file:
@@ -309,13 +313,11 @@ class SpecificAWS(ProviderSpecific):
             self.image = selected_images[0]
 
     def _init_security_group(self):
-        # TODO: separated UI ?
         group_names = [self.ssh_vars.aws.security_group]
         security_groups = self.driver.ex_get_security_groups(group_names=group_names)
         if not security_groups:
-            logging.info("No security group found, would you like to create one? y/n")
-            answer = input()
-            if answer == 'y':
+            answer = utils.get_ui_confirmation("No security group found, would you like to create one?")
+            if answer:
                 security_group_lst = self.driver.ex_create_security_group(
                     self.ssh_vars.aws.security_group,
                     self.ssh_vars.aws.security_group + " security group")
@@ -370,9 +372,9 @@ class SpecificAzure(ProviderSpecific):
         nodes = self.driver.list_nodes(self.ssh_vars.azure.resource_group)
         if not nodes:
             raise Exception("No instance found")
-        if self.ssh_vars.instance_id:
+        if self.ssh_vars.sshcrosscloud_instance_id:
             for node in nodes:
-                if node.id == self.ssh_vars.instance_id:
+                if node.id == self.ssh_vars.sshcrosscloud_instance_id:
                     return node
             raise Exception("No instance found")
         else:
@@ -398,7 +400,7 @@ class SpecificAzure(ProviderSpecific):
         if not nodes:
             logging.info("No instance running")
         for node in nodes:
-            if node.id == self.ssh_vars.instance_id and node.state == "stopped":
+            if node.id == self.ssh_vars.sshcrosscloud_instance_id and node.state == "stopped":
                 start = self.driver.ex_start_node(node)
                 if start:
                     logging.info("Started : " + node.id)
@@ -412,7 +414,7 @@ class SpecificAzure(ProviderSpecific):
         if not nodes:
             logging.info("No instance running")
         for node in nodes:
-            if node.id == self.ssh_vars.instance_id and node.state != "terminated":
+            if node.id == self.ssh_vars.sshcrosscloud_instance_id and node.state != "terminated":
                 terminate = self.driver.ex_stop_node(node)
                 if terminate:
                     logging.warning("Stopped : " + node.id)
@@ -424,8 +426,8 @@ class SpecificAzure(ProviderSpecific):
     def terminate_instance(self) -> None:
         nodes = self.driver.list_nodes(self.ssh_vars.azure.resource_group)
         for node in nodes:
-            if node.id == self.ssh_vars.instance_id and node.state != "terminated":
-                if self.ssh_vars.provider == 'AZURE':
+            if node.id == self.ssh_vars.sshcrosscloud_instance_id and node.state != "terminated":
+                if self.ssh_vars.provider == 'azure':
                     stop = self.driver.destroy_node(node=node, ex_destroy_vhd=True, ex_destroy_nic=False)
                     volumes = self.driver.list_volumes(ex_resource_group=self.ssh_vars.azure.resource_group)
                     volume = [v for v in volumes if "sshcrosscloud" in v.name][0]
@@ -505,13 +507,11 @@ class SpecificAzure(ProviderSpecific):
                 self.driver.ex_list_network_security_groups(resource_group=self.resource_group.name)[0]
 
     def _init_public_ip(self):
-        # TODO: separated UI ?
         pips = self.driver.ex_list_public_ips(resource_group=self.resource_group.name)
         selected_pips = [ip for ip in pips if ip.name == self.ssh_vars.azure.public_ip_name]
         if not selected_pips:
-            print(self.ssh_vars.azure.public_ip_name + " ip does not exist, create one ? y/n")
-            answer = input()
-            if answer == 'y':
+            answer = utils.get_ui_confirmation(self.ssh_vars.azure.public_ip_name + " ip does not exist, create one ?")
+            if answer:
                 public_ip = self.driver.ex_create_public_ip(self.ssh_vars.azure.public_ip_name,
                                                             resource_group=self.resource_group.name,
                                                             location=self.location,
@@ -569,16 +569,15 @@ class SpecificGPC(ProviderSpecific):
         nodes = self.driver.list_nodes()
         if not nodes:
             raise Exception("No instance found")
-        if self.ssh_vars.instance_id:
+        if self.ssh_vars.sshcrosscloud_instance_id:
             for node in nodes:
-                if node.id == self.ssh_vars.instance_id:
+                if node.id == self.ssh_vars.sshcrosscloud_instance_id:
                     return node
             raise Exception("No instance found")
         else:
             raise Exception("No instance ID registered")
 
     def get_credentials(self):
-        # TODO: different method : json https://cloud.google.com/docs/authentication/production?hl=fr#auth-cloud-explicit-python
         if os.path.isfile(self.ssh_vars.credentials_file_path):
             config = configparser.ConfigParser()
             config.read(self.ssh_vars.credentials_file_path)
@@ -590,7 +589,8 @@ class SpecificGPC(ProviderSpecific):
             return user_id, key, project, datacenter
         else:
             raise Exception(
-                "No credentials found in " + self.ssh_vars.credentials_file_path + ", run sshcrosscloud --config -- provider gcp")
+                "No credentials found in " + self.ssh_vars.credentials_file_path
+                + ", run sshcrosscloud --config -- provider gcp")
 
     def start_instance(self):
         self.start_instance_no_arg()
@@ -632,7 +632,7 @@ class SpecificGPC(ProviderSpecific):
             "items": [
                 {
                     "key": "ssh-keys",
-                    "value": "antoinebourayne:" + get_public_key(self.ssh_vars.username)
+                    "value": "antoinebourayne:" + get_public_key(self.ssh_vars.rsa_key_file_path)
                 }
             ]
         }

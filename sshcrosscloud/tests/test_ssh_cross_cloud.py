@@ -1,6 +1,8 @@
+import logging
 import os
 from unittest import TestCase
 
+import coloredlogs
 from dotenv import dotenv_values, find_dotenv
 
 from sshcrosscloud import utils
@@ -8,42 +10,38 @@ from sshcrosscloud.ssh_cross_cloud import SSHCrossCloud
 
 
 class TestSSHCrossCloud(TestCase):
-    default_args = {'sshscript': None,
-                    'leave': False,
-                    'stop': False,
-                    'terminate': False,
-                    'finish': False,
-                    'detach': False,
-                    'attach': False,
-                    'verbose': False,
-                    'status': False,
-                    'destroy': False,
-                    'norsync': False,
-                    'debug': False,
-                    'config': False,
-                    'v': False,
-                    'provider': None,
-                    'L': None,
-                    'R': None,
-                    'i': None}
+    default_args = utils.default_args
+
+    def get_testing_ssh(self, provider: str) -> SSHCrossCloud:
+        args = self.default_args
+        logging.getLogger().setLevel(logging.INFO)
+        coloredlogs.install(level='INFO')
+        ssh_vars = utils.SSHVar(args)
+        ssh_vars.provider = provider
+        ssh = SSHCrossCloud(ssh_vars, dotenv_values(find_dotenv()), os.environ)
+        ssh.init_provider_specifics()
+        return ssh
 
     # AWS
     def test_wait_until_initialization_aws(self):
-        args = self.default_args
-        args['v'] = True
-        ssh_vars = utils.SSHVar(args)
-        ssh_vars.provider = 'aws'
-        ssh = SSHCrossCloud(ssh_vars, dotenv_values(find_dotenv()), os.environ)
-        ssh.init_provider_specifics()
-        ssh.wait_for_public_ip(with_instance=False)
+        ssh = self.get_testing_ssh('aws')
+        ssh.init_instance(with_instance=False)
         assert ssh.wait_until_initialization() is None
         ssh.spe_driver.terminate_instance()
 
-    def test_wait_for_public_ip_aws(self):
-        self.fail()
+    def test_init_instance_aws(self):
+        ssh = self.get_testing_ssh('aws')
+        assert ssh.init_instance(with_instance=False) is None
+        assert ssh.init_instance(with_instance=True) is None
+        ssh.wait_until_initialization()
+        ssh.spe_driver.terminate_instance()
 
     def test_manage_instance_aws(self):
-        self.fail()
+        ssh = self.get_testing_ssh('aws')
+        assert ssh.manage_instance() is None
+        assert ssh.manage_instance() is None
+        ssh.wait_until_initialization()
+        ssh.spe_driver.terminate_instance()
 
     def test_attach_to_instance_aws(self):
         self.fail()
@@ -59,13 +57,24 @@ class TestSSHCrossCloud(TestCase):
 
     # Azure
     def test_wait_until_initialization_azure(self):
-        self.fail()
+        ssh = self.get_testing_ssh('azure')
+        ssh.init_instance(with_instance=False)
+        assert ssh.wait_until_initialization() is None
+        ssh.spe_driver.terminate_instance()
 
-    def test_wait_for_public_ip_azure(self):
-        self.fail()
+    def test_init_instance_azure(self):
+        ssh = self.get_testing_ssh('azure')
+        assert ssh.init_instance(with_instance=False) is None
+        assert ssh.init_instance(with_instance=True) is None
+        ssh.wait_until_initialization()
+        ssh.spe_driver.terminate_instance()
 
     def test_manage_instance_azure(self):
-        self.fail()
+        ssh = self.get_testing_ssh('azure')
+        assert ssh.init_instance(with_instance=False) is None
+        assert ssh.init_instance(with_instance=True) is None
+        ssh.wait_until_initialization()
+        ssh.spe_driver.terminate_instance()
 
     def test_attach_to_instance_azure(self):
         self.fail()
@@ -81,13 +90,24 @@ class TestSSHCrossCloud(TestCase):
 
     # GCP
     def test_wait_until_initialization_gcp(self):
-        self.fail()
+        ssh = self.get_testing_ssh('gcp')
+        ssh.init_instance(with_instance=False)
+        assert ssh.wait_until_initialization() is None
+        ssh.spe_driver.terminate_instance()
 
-    def test_wait_for_public_ip_gcp(self):
-        self.fail()
+    def test_init_instance_gcp(self):
+        ssh = self.get_testing_ssh('gcp')
+        assert ssh.init_instance(with_instance=False) is None
+        assert ssh.init_instance(with_instance=True) is None
+        ssh.wait_until_initialization()
+        ssh.spe_driver.terminate_instance()
 
     def test_manage_instance_gcp(self):
-        self.fail()
+        ssh = self.get_testing_ssh('gcp')
+        assert ssh.manage_instance() is None
+        assert ssh.manage_instance() is None
+        ssh.wait_until_initialization()
+        ssh.spe_driver.terminate_instance()
 
     def test_attach_to_instance_gcp(self):
         self.fail()

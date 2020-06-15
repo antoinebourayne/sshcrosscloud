@@ -67,6 +67,25 @@ Synchronize instance directory to local and destroy instance              	sshcr
 Force destruction of the instance    	                                    sshcrosscloud.py --destroy
 """
 
+default_args = {'sshscript': None,
+                'leave': False,
+                'stop': False,
+                'terminate': False,
+                'finish': False,
+                'detach': False,
+                'attach': False,
+                'verbose': False,
+                'status': False,
+                'destroy': False,
+                'norsync': False,
+                'debug': False,
+                'config': False,
+                'v': False,
+                'provider': None,
+                'L': None,
+                'R': None,
+                'i': None}
+
 
 class AWS:
     pass
@@ -82,7 +101,6 @@ class GCP:
 
 class SSHVar:
     def __init__(self, arg_dict: dict):
-
         self.arg_dict = arg_dict
 
         # Parser Commands
@@ -123,7 +141,7 @@ class SSHVar:
         self.rsync_verbose = False
         self.debug = False
         self.instance_name = None
-        self.instance_id = None
+        self.sshcrosscloud_instance_id = None
         self.instance_state = None
         self.public_ip = None
         self.user_data = None
@@ -133,6 +151,7 @@ class SSHVar:
         self.rsa_key_file_path = None
         self.rsa_key_name = None
         self.status_mode = False
+        self.rsync_directory = str(Path.home())
         self.credentials_items = []
         self.final_state = "terminate"
         self.ssh_default_params = "-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o LogLevel=quiet"
@@ -216,10 +235,8 @@ def get_ui_credentials(path: str, credentials_items: list):
         with open(path, 'r+') as file:
             file_data = file.read()
             if file_data:
-                print("Credentials have already been saved, would you like to change them? y/n")
-                answer = input()
-                if answer == 'y':
-                    print("teub")
+                answer = get_ui_confirmation("Credentials have already been saved, would you like to change them?")
+                if answer:
                     list_of_credentials = {}
                     for i in credentials_items:
                         print("Enter" + i + ":")
@@ -231,3 +248,15 @@ def get_ui_credentials(path: str, credentials_items: list):
                     return
 
     return
+
+
+def get_ui_confirmation(message: str):
+    print(message + " y/n")
+    while 1:
+        answer = input()
+        if answer == 'y':
+            return True
+        if answer == 'n':
+            return False
+        else:
+            print("Must provide 'y' or 'n' answer")
