@@ -76,7 +76,6 @@ class SSHCrossCloud:
         self.ssh_vars.user_data = get_string_from_file(".user_data")
 
     def init_provider_specifics(self):
-        # todo: add exceptions
         nodes = self.spe_driver.init_specific()
 
         for node in nodes:
@@ -292,7 +291,6 @@ class SSHCrossCloud:
                 l=None,
                 r=None,
                 i=None,
-                v=None,
                 debug=None,
                 status=None,
                 destroy=None):
@@ -353,9 +351,6 @@ class SSHCrossCloud:
         if i:
             self.ssh_vars.pem_ssh = "-i " + i
 
-        if v:
-            logging.getLogger().setLevel(logging.INFO)
-            coloredlogs.install(level='INFO')
 
         if debug:
             self.ssh_vars.debug = True

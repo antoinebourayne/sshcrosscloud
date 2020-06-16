@@ -228,24 +228,22 @@ def get_public_key(private_key_path: str) -> str:
         raise Exception(private_key_path + ".pub not found, add --config to create one")
 
 
-def get_ui_credentials(path: str, credentials_items: list):
-    if os.path.isfile(path):
-        with open(path, 'r+') as file:
-            file_data = file.read()
-            if file_data:
-                answer = get_ui_confirmation("Credentials have already been saved, would you like to change them?")
-                if answer:
-                    list_of_credentials = {}
-                    for i in credentials_items:
-                        print("Enter " + i + ":")
-                        input_credential = input()
-                        list_of_credentials[i] = input_credential
-                    return list_of_credentials
-                else:
-                    logging.info("Credentials have not been changed")
-                    return
-
-    return
+def get_ui_credentials(credentials_items: list):
+    answer = get_ui_confirmation("Would you like to edit your credentials?")
+    if answer:
+        pass
+    else:
+        return
+    logging.info("No credential stored")
+    list_of_credentials = {}
+    for i in credentials_items:
+        print("Enter " + i + ":")
+        input_credential = input()
+        list_of_credentials[i] = input_credential
+    if not list_of_credentials:
+        return None
+    else:
+        return list_of_credentials
 
 
 def get_ui_confirmation(message: str):

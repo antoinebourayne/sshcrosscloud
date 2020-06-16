@@ -1,6 +1,8 @@
+import logging
 import os
 import sys
 
+import coloredlogs
 from dotenv import dotenv_values, find_dotenv
 
 from sshcrosscloud.ssh_cross_cloud import SSHCrossCloud
@@ -48,14 +50,18 @@ def main():
     # Object that contains all the variables
     ssh_vars = utils.SSHVar(command_args)
 
+    # Verbose
+    if ssh_vars.v:
+        logging.getLogger().setLevel(logging.INFO)
+        coloredlogs.install(level='INFO')
+
     # Object that contains methods related to ssh actions and a Specific Driver with provider specific actions
     ssh = SSHCrossCloud(ssh_vars, dotenv_values(find_dotenv()), os.environ)
 
     if ssh.ssh_vars.config:
         # You can add here your own method to get your credentials
-        ssh.spe_driver.write_credentials(utils.get_ui_credentials(
-            path=ssh.ssh_vars.rsa_key_file_path,
-            credentials_items=ssh.ssh_vars.credentials_items))
+        ssh.spe_driver.write_credentials(utils.get_ui_credentials(credentials_items=ssh.ssh_vars.credentials_items))
+
     # Only once the credentials are initialized, this method can be called
     ssh.init_provider_specifics()
 
@@ -72,7 +78,6 @@ def main():
                 l=ssh.ssh_vars.l,
                 r=ssh.ssh_vars.r,
                 i=ssh.ssh_vars.i,
-                v=ssh.ssh_vars.v,
                 debug=ssh.ssh_vars.debug,
                 status=ssh.ssh_vars.status,
                 destroy=ssh.ssh_vars.destroy)

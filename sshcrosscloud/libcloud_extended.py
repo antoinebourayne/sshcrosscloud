@@ -117,9 +117,13 @@ class ProviderSpecific(ABC):
         else:
             config = configparser.ConfigParser()
             config['default'] = credentials
-            with open(self.ssh_vars.credentials_file_path, 'w') as cred_file:
-                config.write(cred_file)
-            logging.info("Credentials have been saved")
+            answer = utils.get_ui_confirmation("Write credentials in : " + self.ssh_vars.credentials_file_path + " ?")
+            if answer:
+                with open(self.ssh_vars.credentials_file_path, 'w+') as cred_file:
+                    config.write(cred_file)
+                logging.info("Credentials have been saved")
+            else:
+                logging.info("Skip writting credentials")
 
     def create_local_rsa_key_pair(self):
         genrate_key_pair = "ssh-keygen -b 2048 -f " + self.ssh_vars.rsa_key_file_path
@@ -229,7 +233,7 @@ class SpecificAWS(ProviderSpecific):
         for i, j in default_user_list.items():
             if i.lower() in self.ssh_vars.aws.image_name.lower():
                 self.ssh_vars.instance_user = j
-        if self.ssh_vars.instance_user:
+        if not self.ssh_vars.instance_user:
             raise Exception("Image name does not correspond to AWS User List")
 
         if not self.ssh_vars.aws.region:
