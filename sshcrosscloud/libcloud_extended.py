@@ -1,11 +1,13 @@
 import configparser
+import getpass
 import logging
 import os
 import stat
 import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
-
+from libcloud.compute.providers import get_driver
+from libcloud.compute.types import Provider
 import sshcrosscloud.utils as utils
 from libcloud.compute.base import NodeAuthSSHKey
 from sshcrosscloud.utils import get_public_key
@@ -20,6 +22,22 @@ This class is an upgrade of libcloud to simplify the use of SSH CROSS CLOUD
 class ProviderSpecific(ABC):
     ssh_vars = None
     driver = None
+
+    @abstractmethod
+    def init_specific_credentials(self):
+        """
+
+        :return:
+        """
+        pass
+
+    @abstractmethod
+    def init_specific(self):
+        """
+
+        :return:
+        """
+        pass
 
     @abstractmethod
     def create_instance(self):
@@ -104,16 +122,16 @@ class ProviderSpecific(ABC):
             logging.info("Credentials have been saved")
 
     def create_local_rsa_key_pair(self):
-        genrate_key_pair = "ssh-keygen -f " + self.ssh_vars.rsa_key_file_path
+        genrate_key_pair = "ssh-keygen -b 2048 -f " + self.ssh_vars.rsa_key_file_path
 
-        pub_from_priv = "ssh-keygen -y -f " + self.ssh_vars.rsa_key_file_path \
+        pub_from_priv = "ssh-keygen -b 2048 -y -f " + self.ssh_vars.rsa_key_file_path \
                         + " > " + self.ssh_vars.rsa_key_file_path + ".pub"
 
         if os.path.isfile(self.ssh_vars.rsa_key_file_path):
             if os.path.isfile(self.ssh_vars.rsa_key_file_path + ".pub"):
                 logging.info("Using key pair : " + self.ssh_vars.rsa_key_file_path + ".pub")
             else:
-                logging.info("Creating key pair from existing key in " + self.ssh_vars.rsa_key_file_path)
+                logging.info("Creating public key from private key in " + self.ssh_vars.rsa_key_file_path)
                 return_code = os.system(pub_from_priv)
                 if return_code == 0:
                     logging.info("Public Key created: " + self.ssh_vars.rsa_key_file_path + ".pub")
@@ -198,9 +216,35 @@ class ProviderSpecific(ABC):
 
 
 class SpecificAWS(ProviderSpecific):
-    def __init__(self, ssh_vars):
-        self.ssh_vars = ssh_vars
+    def __init__(self, ssh_vas: utils.SSHVar):
+        self.ssh_vars = ssh_vas
         self.driver = None
+
+    def init_specific_credentials(self):
+        self.ssh_vars.credentials_items = self.ssh_vars.aws.credentials_items
+        self.ssh_vars.credentials_file_path = self.ssh_vars.aws.credentials_path
+
+    def init_specific(self):
+        default_user_list = self.ssh_vars.aws.default_user_list
+        for i, j in default_user_list.items():
+            if i.lower() in self.ssh_vars.aws.image_name.lower():
+                self.ssh_vars.instance_user = j
+        if self.ssh_vars.instance_user:
+            raise Exception("Image name does not correspond to AWS User List")
+
+        if not self.ssh_vars.aws.region:
+            self.ssh_vars.aws.region = self.get_region()
+        self.ssh_vars.aws.access_key_id, self.ssh_vars.aws.secret_access_key = self.get_credentials()
+
+        cls = get_driver(Provider.EC2)
+        provider_driver = cls(self.ssh_vars.aws.access_key_id,
+                              self.ssh_vars.aws.secret_access_key,
+                              region=self.ssh_vars.aws.region)
+
+        self.driver = provider_driver
+        nodes = self.driver.list_nodes()
+
+        return nodes
 
     def create_instance(self):
 
@@ -216,7 +260,7 @@ class SpecificAWS(ProviderSpecific):
                                        image=self.image,  # Need to use Libcloud object, can't use string
                                        size=self.size,
                                        ex_userdata=self.ssh_vars.user_data,
-                                       ex_keyname=self.ssh_vars.username,
+                                       ex_keyname=self.ssh_vars.rsa_key_name,
                                        ex_securitygroup=[self.security_group.name])
 
         return node
@@ -274,12 +318,10 @@ class SpecificAWS(ProviderSpecific):
                             ", run sshcrosscloud --config -- provider aws")
 
     def _init_rsa_key_pair(self):
-        logging.info("Creating key pair")
-
         if os.path.isfile(self.ssh_vars.rsa_key_file_path):
             for key in self.driver.ex_list_keypairs():
                 if self.ssh_vars.rsa_key_name == key['keyName']:
-                    logging.info("Key pair already stored")
+                    logging.info("Key pair already stored (" + self.ssh_vars.rsa_key_file_path + ")")
                     return
 
             logging.info("Creating key pair from existing key in " + self.ssh_vars.rsa_key_file_path)
@@ -333,9 +375,38 @@ class SpecificAWS(ProviderSpecific):
 
 
 class SpecificAzure(ProviderSpecific):
-    def __init__(self, ssh_vars):
-        self.ssh_vars = ssh_vars
+    def __init__(self, ssh_vas: utils.SSHVar):
+        self.ssh_vars = ssh_vas
         self.driver = None
+
+    def init_specific_credentials(self):
+        self.ssh_vars.credentials_items = self.ssh_vars.azure.credentials_items
+        self.ssh_vars.credentials_file_path = self.ssh_vars.azure.credentials_path
+
+    def init_specific(self):
+        self.ssh_vars.instance_user = "azure"
+
+        if not self.ssh_vars.azure.region:
+            raise Exception("No region found, you must specify a region in .env file")
+        self.ssh_vars.azure.tenat_id, self.ssh_vars.azure.subscription_id, self.ssh_vars.azure.application_id, \
+        self.ssh_vars.azure.secret = self.get_credentials()
+        if not self.ssh_vars.azure.public_ip_name:
+            self.ssh_vars.azure.public_ip_name = "sshcrosscloud-ip-" + self.ssh_vars.username
+        if not self.ssh_vars.azure.virtual_network:
+            self.ssh_vars.azure.virtual_network = "sshcrosscloud-vn-" + self.ssh_vars.username
+        if not self.ssh_vars.azure.subnet:
+            self.ssh_vars.azure.subnet = "sshcrosscloud-sn-" + self.ssh_vars.username
+
+        cls = get_driver(Provider.AZURE_ARM)
+        provider_driver = cls(tenant_id=self.ssh_vars.azure.tenat_id,
+                              subscription_id=self.ssh_vars.azure.subscription_id,
+                              key=self.ssh_vars.azure.application_id,
+                              secret=self.ssh_vars.azure.secret)
+
+        self.driver = provider_driver
+        nodes = self.driver.list_nodes(self.ssh_vars.azure.resource_group)
+
+        return nodes
 
     def create_instance(self):
         self._init_rsa_key_pair()
@@ -545,9 +616,32 @@ class SpecificAzure(ProviderSpecific):
 
 
 class SpecificGPC(ProviderSpecific):
-    def __init__(self, ssh_vars):
-        self.ssh_vars = ssh_vars
+    def __init__(self, ssh_vas: utils.SSHVar):
+        self.ssh_vars = ssh_vas
         self.driver = None
+
+    def init_specific_credentials(self):
+        self.ssh_vars.credentials_items = self.ssh_vars.gcp.credentials_items
+        self.ssh_vars.credentials_file_path = self.ssh_vars.gcp.credentials_path
+
+    def init_specific(self):
+        self.ssh_vars.instance_user = getpass.getuser()
+
+        if not self.ssh_vars.gcp.region:
+            raise Exception("No region found, you must specify a region in .env file")
+        self.ssh_vars.gcp.user_id, self.ssh_vars.gcp.key_path, self.ssh_vars.gcp.project, self.ssh_vars.gcp.data_center \
+            = self.get_credentials()
+
+        cls = get_driver(Provider.GCE)
+        provider_driver = cls(user_id=self.ssh_vars.gcp.user_id,
+                              key=self.ssh_vars.gcp.key_path,
+                              project=self.ssh_vars.gcp.project,
+                              datacenter=self.ssh_vars.gcp.data_center)
+
+        self.driver = provider_driver
+        nodes = self.driver.list_nodes()
+
+        return nodes
 
     def create_instance(self):
         self._init_rsa_key_pair()

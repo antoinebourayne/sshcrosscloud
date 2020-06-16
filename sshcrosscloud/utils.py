@@ -79,7 +79,6 @@ default_args = {'sshscript': None,
                 'destroy': False,
                 'norsync': False,
                 'debug': False,
-                'config': False,
                 'v': False,
                 'provider': None,
                 'L': None,
@@ -137,7 +136,6 @@ class SSHVar:
         self.no_rsync_end = False
         self.no_attach = False
         self.no_wait_until_init = False
-        self.config = False
         self.rsync_verbose = False
         self.debug = False
         self.instance_name = None
@@ -151,7 +149,7 @@ class SSHVar:
         self.rsa_key_file_path = None
         self.rsa_key_name = None
         self.status_mode = False
-        self.rsync_directory = str(Path.home())
+        self.rsync_directory = os.path.expanduser('~')
         self.credentials_items = []
         self.final_state = "terminate"
         self.ssh_default_params = "-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o LogLevel=quiet"
@@ -180,8 +178,8 @@ class SSHVar:
         self.aws.security_group = 'sshcrosscloud'
         self.aws.image_id = 'ami-0e342d72b12109f91'
         self.aws.image_name = 'ubuntu'
-        self.aws.credentials_path = str(Path.home()) + "/.aws/credentials"
-        self.aws.config_path = str(Path.home()) + "/.aws/config"
+        self.aws.credentials_path = os.path.expanduser('~') + "/.aws/credentials"
+        self.aws.config_path = os.path.expanduser('~') + "/.aws/config"
         self.aws.credentials_items = ['aws_access_key_id', 'aws_secret_access_key']
 
         # Azure Variables
@@ -200,7 +198,7 @@ class SSHVar:
         self.azure.image_name = 'ubuntu'
         self.azure.resource_group = 'NetworkWatcherRG'
         self.azure.publisher = 'Canonical'
-        self.azure.credentials_path = str(Path.home()) + "/.azure/credentials"
+        self.azure.credentials_path = os.path.expanduser('~') + "/.azure/credentials"
         self.azure.credentials_items = ['tenant', 'subscription_id', 'client_id', 'secret']
 
         # GCP Variables
@@ -212,7 +210,7 @@ class SSHVar:
         self.gcp.region = 'us-central1-a'
         self.gcp.size = 'f1-micro'
         self.gcp.image_name = 'ubuntu'
-        self.gcp.credentials_path = str(Path.home()) + "/.gcp/credentials"
+        self.gcp.credentials_path = os.path.expanduser('~') + "/.gcp/credentials"
         self.gcp.credentials_items = ['user_id', 'key', 'project', 'datacenter']
 
 
@@ -239,7 +237,7 @@ def get_ui_credentials(path: str, credentials_items: list):
                 if answer:
                     list_of_credentials = {}
                     for i in credentials_items:
-                        print("Enter" + i + ":")
+                        print("Enter " + i + ":")
                         input_credential = input()
                         list_of_credentials[i] = input_credential
                     return list_of_credentials

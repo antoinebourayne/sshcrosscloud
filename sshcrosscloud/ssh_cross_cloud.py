@@ -1,14 +1,11 @@
 import os
 import getpass as gt
+import sys
 import time
-import getpass
 
 import coloredlogs
-from libcloud.compute.providers import get_driver
-from libcloud.compute.types import Provider
 import logging
 
-from sshcrosscloud import utils
 from sshcrosscloud.libcloud_extended import get_provider_specific_driver
 from sshcrosscloud.utils import get_string_from_file, SSHVar
 
@@ -19,10 +16,8 @@ Basically contains all the attributes to create an instance on multiple provider
 """
 
 
-# TODO: put try/catch when needed
 class SSHCrossCloud:
     def __init__(self, ssh_var, dotenv, env):
-        self.driver = None
         self.ssh_vars = ssh_var
 
         # dotenv values are taken form .env file
@@ -30,9 +25,9 @@ class SSHCrossCloud:
 
         self._init_variables()
 
-        self._init_specifics_for_credentials()
-
         self.spe_driver = get_provider_specific_driver(self.ssh_vars)
+
+        self.spe_driver.init_specific_credentials()
 
     def _init_env(self, dotenv, environ):
         """
@@ -80,103 +75,21 @@ class SSHCrossCloud:
 
         self.ssh_vars.user_data = get_string_from_file(".user_data")
 
-    def _init_specifics_for_credentials(self):
-        if self.ssh_vars.provider == 'aws':
-            self.ssh_vars.credentials_items = self.ssh_vars.aws.credentials_items
-            self.ssh_vars.credentials_file_path = self.ssh_vars.aws.credentials_path
-        if self.ssh_vars.provider == 'azure':
-            self.ssh_vars.credentials_items = self.ssh_vars.azure.credentials_items
-            self.ssh_vars.credentials_file_path = self.ssh_vars.azure.credentials_path
-        if self.ssh_vars.provider == 'gcp':
-            self.ssh_vars.credentials_items = self.ssh_vars.gcp.credentials_items
-            self.ssh_vars.credentials_file_path = self.ssh_vars.gcp.credentials_path
-
     def init_provider_specifics(self):
-        """
-        AWS EC2  : AWS
-        Azure VM : AZURE
-        Google Compute Engine : GCP
-        :param env:
-        """
-        try:
-            if self.ssh_vars.provider == "aws":
-                default_user_list = self.ssh_vars.aws.default_user_list
-                for i, j in default_user_list.items():
-                    if i.lower() in self.ssh_vars.aws.image_name.lower():
-                        self.ssh_vars.instance_user = j
+        # todo: add exceptions
+        nodes = self.spe_driver.init_specific()
 
-                if not self.ssh_vars.aws.region:
-                    self.ssh_vars.aws.region = self.spe_driver.get_region()
-                self.ssh_vars.aws.access_key_id, self.ssh_vars.aws.secret_access_key = self.spe_driver.get_credentials()
-
-                cls = get_driver(Provider.EC2)
-                provider_driver = cls(self.ssh_vars.aws.access_key_id,
-                                      self.ssh_vars.aws.secret_access_key,
-                                      region=self.ssh_vars.aws.region)
-
-                self.driver = provider_driver
-                self.spe_driver.driver = self.driver
-                nodes = self.driver.list_nodes()
-
-            elif self.ssh_vars.provider == "azure":
-                self.ssh_vars.instance_user = "azure"
-
-                if not self.ssh_vars.azure.region:
-                    raise Exception("No region found, you must specify a region in .env file")
-                self.ssh_vars.azure.tenat_id, self.ssh_vars.azure.subscription_id, self.ssh_vars.azure.application_id, \
-                self.ssh_vars.azure.secret = self.spe_driver.get_credentials()
-                if not self.ssh_vars.azure.public_ip_name:
-                    self.ssh_vars.azure.public_ip_name = "sshcrosscloud-ip-" + self.ssh_vars.username
-                if not self.ssh_vars.azure.virtual_network:
-                    self.ssh_vars.azure.virtual_network = "sshcrosscloud-vn-" + self.ssh_vars.username
-                if not self.ssh_vars.azure.subnet:
-                    self.ssh_vars.azure.subnet = "sshcrosscloud-sn-" + self.ssh_vars.username
-
-                cls = get_driver(Provider.AZURE_ARM)
-                provider_driver = cls(tenant_id=self.ssh_vars.azure.tenat_id,
-                                      subscription_id=self.ssh_vars.azure.subscription_id,
-                                      key=self.ssh_vars.azure.application_id,
-                                      secret=self.ssh_vars.azure.secret)
-
-                self.driver = provider_driver
-                self.spe_driver.driver = self.driver
-                nodes = self.driver.list_nodes(self.ssh_vars.azure.resource_group)
-
-            elif self.ssh_vars.provider == "gcp":
-                self.ssh_vars.instance_user = getpass.getuser()
-
-                if not self.ssh_vars.gcp.region:
-                    raise Exception("No region found, you must specify a region in .env file")
-                self.ssh_vars.gcp.user_id, self.ssh_vars.gcp.key_path, self.ssh_vars.gcp.project, self.ssh_vars.gcp.data_center \
-                    = self.spe_driver.get_credentials()
-
-                cls = get_driver(Provider.GCE)
-                provider_driver = cls(user_id=self.ssh_vars.gcp.user_id,
-                                      key=self.ssh_vars.gcp.key_path,
-                                      project=self.ssh_vars.gcp.project,
-                                      datacenter=self.ssh_vars.gcp.data_center)
-
-                self.driver = provider_driver
-                self.spe_driver.driver = self.driver
-                nodes = self.driver.list_nodes()
-
-            else:
-                raise Exception("Provider not supported")
-
-            for node in nodes:
-                if node.name == self.ssh_vars.instance_name and node.state not in ["terminated"]:
-                    self.ssh_vars.sshcrosscloud_instance_id = node.id
-                    self.ssh_vars.instance_state = node.state
-                    self.ssh_vars.public_ip = node.public_ips[0]
-
-        except Exception as e:
-            raise Exception("Could not get driver : " + str(e))
+        for node in nodes:
+            if node.name == self.ssh_vars.instance_name and node.state not in ["terminated"]:
+                self.ssh_vars.sshcrosscloud_instance_id = node.id
+                self.ssh_vars.instance_state = node.state
+                self.ssh_vars.public_ip = node.public_ips[0]
 
     def wait_until_initialization(self) -> None:
         """
         Tries to SSH the instance multiple times until it is initialized
-        :param ssh:
-        :return:0 if OK 1 if error 2 if no instance
+        :param :
+        :return:None
         """
         logging.info("Waiting for instance initialization...")
         i = 0
@@ -243,8 +156,8 @@ class SSHCrossCloud:
     def attach_to_instance(self) -> None:
         """
         Open SSH terminal to instance and launch multiplex session if needed
-        :param ssh:
-        :return: 0 if SSH connection succeeded, 1 if not
+        :param : self
+        :return: None
         """
         ssh_params = ""
         if self.ssh_vars.ssh_params:
@@ -297,8 +210,8 @@ class SSHCrossCloud:
     def finish_action(self) -> None:
         """
         Terminates, destroys or leaves instances depending on the FINAL_STATE
-        :param ssh:
-        :return:0 if OK 1 if error
+        :param : self
+        :return: None
         """
         if self.ssh_vars.final_state == "leave":
             logging.warning("Your instance is still alive")
@@ -324,8 +237,8 @@ class SSHCrossCloud:
     def rsync_to_instance(self) -> None:
         """
         Using rsync in command line to sync local directory to instance
-        :param ssh:
-        :return:
+        :param : self
+        :return: None
         """
         logging.info("Synchronizing local directory to instance")
         if self.ssh_vars.rsync_verbose:
@@ -345,8 +258,8 @@ class SSHCrossCloud:
     def rsync_back_to_local(self) -> None:
         """
         Rsync back
-        :param ssh:
-        :return:
+        :param : self
+        :return: None
         """
         logging.info("Synchronizing directory back to local")
         if self.ssh_vars.rsync_verbose:
@@ -381,7 +294,6 @@ class SSHCrossCloud:
                 i=None,
                 v=None,
                 debug=None,
-                config=None,
                 status=None,
                 destroy=None):
 
@@ -448,9 +360,6 @@ class SSHCrossCloud:
         if debug:
             self.ssh_vars.debug = True
 
-        if config:
-            self.ssh_vars.config = True
-
         if status:
             self.ssh_vars.status_mode = True
             self.ssh_vars.no_rsync_begin = True
@@ -475,13 +384,13 @@ class SSHCrossCloud:
         if not self.ssh_vars.no_wait_until_init:
             self.wait_until_initialization()
 
-        if self.ssh_vars.no_rsync_begin:
+        if not self.ssh_vars.no_rsync_begin:
             self.rsync_to_instance()
 
         if not self.ssh_vars.no_attach:
             self.attach_to_instance()
 
-        if self.ssh_vars.no_rsync_end:
+        if not self.ssh_vars.no_rsync_end:
             self.rsync_back_to_local()
 
         if not self.ssh_vars.status_mode:
