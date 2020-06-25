@@ -17,5 +17,6 @@ setuptools.setup(
         "Programming Language :: Python :: 3",
         "Operating System :: Linux",
     ],
+    install_requires=['pandas==0.23.3'],
     python_requires='>=3.6',
 )

@@ -1,8 +1,9 @@
+import inspect
 import logging
 import os
 import sys
-from pathlib import Path
-import coloredlogs
+
+from dotenv import dotenv_values, find_dotenv
 
 """
 Here are implemented strings and functions used in more than one file
@@ -78,12 +79,27 @@ default_args = {'sshscript': None,
                 'status': False,
                 'destroy': False,
                 'norsync': False,
-                'debug': False,
-                'v': False,
-                'provider': None,
+                'config': False,
+                'v': True,
+                'provider': 'aws',
                 'L': None,
                 'R': None,
                 'i': None}
+
+aws_default_user_list = {
+    'Amazon Linux': 'ec2-user',
+    'ubuntu': 'ubuntu',
+    'RHEL 6.[0-3]': 'root',
+    'RHEL 6.[0-9]+': 'ec2-user',
+    'Fedora': 'fedora',
+    'Centos': 'centos',
+    'SUSE': 'ec2-user',
+    'BitNami': 'bitnami',
+    'TurnKey': 'root',
+    'NanoStack': 'ubuntu',
+    'FreeBSD': 'ec2-user',
+    'OmniOS': 'root',
+}
 
 
 class AWS:
@@ -98,29 +114,26 @@ class GCP:
     pass
 
 
-class SSHVar:
-    def __init__(self, arg_dict: dict):
-        self.arg_dict = arg_dict
+class SSHParams:
+    def __init__(self, **params):
 
         # Parser Commands
-        self.provider = arg_dict.get('provider')
-        self.ssh_script = arg_dict.get('sshscript')
-        self.leave = arg_dict.get('leave')
-        self.stop = arg_dict.get('stop')
-        self.terminate = arg_dict.get('terminate')
-        self.detach = arg_dict.get('detach')
-        self.attach = arg_dict.get('attach')
-        self.finish = arg_dict.get('finish')
-        self.verbose = arg_dict.get('verbose')
-        self.norsync = arg_dict.get('norsync')
-        self.l = arg_dict.get('l')
-        self.r = arg_dict.get('r')
-        self.i = arg_dict.get('i')
-        self.v = arg_dict.get('v')
-        self.debug = arg_dict.get('debug')
-        self.config = arg_dict.get('config')
-        self.status = arg_dict.get('status')
-        self.destroy = arg_dict.get('destroy')
+        self.provider = params.get('provider')
+        self.ssh_script = params.get('sshscript')
+        self.leave = params.get('leave')
+        self.stop = params.get('stop')
+        self.terminate = params.get('terminate')
+        self.detach = params.get('detach')
+        self.attach = params.get('attach')
+        self.finish = params.get('finish')
+        self.norsync = params.get('norsync')
+        self.l = params.get('l')
+        self.r = params.get('r')
+        self.i = params.get('i')
+        self.verbose = params.get('v')
+        self.config = params.get('config')
+        self.status = params.get('status')
+        self.destroy = params.get('destroy')
 
         # Fonctional Variables
         self.polygram = None
@@ -136,8 +149,6 @@ class SSHVar:
         self.no_rsync_end = False
         self.no_attach = False
         self.no_wait_until_init = False
-        self.rsync_verbose = False
-        self.debug = False
         self.instance_name = None
         self.sshcrosscloud_instance_id = None
         self.instance_state = None
@@ -146,33 +157,22 @@ class SSHVar:
         self.instance_user = None
         self.credentials_file_path = None
         self.instance_spec_arg = None
-        self.rsa_key_file_path = None
+        self.rsa_private_key_file_path = None
         self.rsa_key_name = None
         self.status_mode = False
+        self.credentials_name = None
         self.rsync_directory = os.path.expanduser('~')
+        self.user_data_file_path = ".user_data"
         self.credentials_items = []
         self.final_state = "terminate"
-        self.ssh_default_params = "-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o LogLevel=quiet"
+        self.ssh_fonctionnal_params = "-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o LogLevel=quiet"
         self.nbOfSshConnections = 0
+        self.provider_list = ['aws', 'azure', 'gcp']
 
         # AWS Object
-        self.aws = AWS
+        self.aws = AWS()
         self.aws.access_key_id = None
         self.aws.secret_access_key = None
-        self.aws.default_user_list = {
-            'Amazon Linux': 'ec2-user',
-            'ubuntu': 'ubuntu',
-            'RHEL 6.[0-3]': 'root',
-            'RHEL 6.[0-9]+': 'ec2-user',
-            'Fedora': 'fedora',
-            'Centos': 'centos',
-            'SUSE': 'ec2-user',
-            'BitNami': 'bitnami',
-            'TurnKey': 'root',
-            'NanoStack': 'ubuntu',
-            'FreeBSD': 'ec2-user',
-            'OmniOS': 'root',
-        }
         self.aws.region = 'eu-central-1'
         self.aws.size = 't2.micro'
         self.aws.security_group = 'sshcrosscloud'
@@ -181,9 +181,10 @@ class SSHVar:
         self.aws.credentials_path = os.path.expanduser('~') + "/.aws/credentials"
         self.aws.config_path = os.path.expanduser('~') + "/.aws/config"
         self.aws.credentials_items = ['aws_access_key_id', 'aws_secret_access_key']
+        self.aws.credentials_name = 'default'
 
         # Azure Variables
-        self.azure = Azure
+        self.azure = Azure()
         self.azure.tenant_id = None
         self.azure.subscription_id = None
         self.azure.application_id = None
@@ -200,9 +201,10 @@ class SSHVar:
         self.azure.publisher = 'Canonical'
         self.azure.credentials_path = os.path.expanduser('~') + "/.azure/credentials"
         self.azure.credentials_items = ['tenant', 'subscription_id', 'client_id', 'secret']
+        self.azure.credentials_name = 'default'
 
         # GCP Variables
-        self.gcp = GCP
+        self.gcp = GCP()
         self.gcp.user_id = None
         self.gcp.key_path = None
         self.gcp.project = None
@@ -212,11 +214,44 @@ class SSHVar:
         self.gcp.image_name = 'ubuntu'
         self.gcp.credentials_path = os.path.expanduser('~') + "/.gcp/credentials"
         self.gcp.credentials_items = ['user_id', 'key', 'project', 'datacenter']
+        self.gcp.credentials_name = 'default'
+
+    def update_custom_values(self, replace_dotenv: bool, replace_environ: bool):
+        """
+        This method creates a dict with dotenv values updated by the environment values,
+        then store them in the ssh_var object
+        """
+        # Default
+        env = {}
+
+        if replace_dotenv:
+            dotenv = dotenv_values(find_dotenv())
+            for k, v in dotenv.items():
+                env[k] = v
+
+        if replace_environ:
+            environ = os.environ
+            for k, v in environ.items():
+                env[k] = v
+
+        for attr, value in self.__dict__.items():
+            if env.get(attr.upper()):
+                setattr(self, attr, env.get(attr.upper()))
+
+        for name, obj in inspect.getmembers(self):
+            if name in self.provider_list:
+                for attr, value in obj.__dict__.items():
+                    if env.get(str(attr.upper())):
+                        setattr(obj, attr, env.get(attr.upper()))
 
 
 def get_string_from_file(filepath):
-    with open(filepath, 'r') as userdatafile:
-        return userdatafile.read()
+    try:
+        if os.path.isfile(filepath):
+            with open(filepath, 'r') as userdatafile:
+                return userdatafile.read()
+    except:
+        logging.info("No file found in path : " + filepath)
 
 
 def get_public_key(private_key_path: str) -> str:
@@ -226,24 +261,6 @@ def get_public_key(private_key_path: str) -> str:
         return rsa_pub
     else:
         raise Exception(private_key_path + ".pub not found, add --config to create one")
-
-
-def get_ui_credentials(credentials_items: list):
-    answer = get_ui_confirmation("Would you like to edit your credentials?")
-    if answer:
-        pass
-    else:
-        return
-    logging.info("No credential stored")
-    list_of_credentials = {}
-    for i in credentials_items:
-        print("Enter " + i + ":")
-        input_credential = input()
-        list_of_credentials[i] = input_credential
-    if not list_of_credentials:
-        return None
-    else:
-        return list_of_credentials
 
 
 def get_ui_confirmation(message: str):
