@@ -161,6 +161,7 @@ class SSHParams:
         self.rsa_key_name = None
         self.status_mode = False
         self.credentials_name = None
+        self.general_name = "sshcrosscloud"
         self.rsync_directory = os.path.expanduser('~')
         self.user_data_file_path = ".user_data"
         self.credentials_items = []
@@ -250,8 +251,9 @@ def get_string_from_file(filepath):
         if os.path.isfile(filepath):
             with open(filepath, 'r') as userdatafile:
                 return userdatafile.read()
-    except:
-        logging.info("No file found in path : " + filepath)
+    except Exception as e:
+        print(e)
+        return None
 
 
 def get_public_key(private_key_path: str) -> str:
@@ -273,3 +275,7 @@ def get_ui_confirmation(message: str):
             return False
         else:
             print("Must provide 'y' or 'n' answer")
+
+
+def this_is_an_exception():
+    raise Exception("oops")

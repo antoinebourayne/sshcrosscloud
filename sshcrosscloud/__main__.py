@@ -51,8 +51,7 @@ def main():
         coloredlogs.install(level='INFO')
 
     ssh = SSHCrossCloud(**command_args)
-    ssh.ssh_params.show_main_parameters()
-    #ssh.execute()
+    ssh.execute()
 
     return 0
 

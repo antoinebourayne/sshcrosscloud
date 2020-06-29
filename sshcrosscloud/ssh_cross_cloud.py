@@ -97,6 +97,8 @@ class SSHCrossCloud:
             except Exception as e:
                 raise Exception(e)
 
+        raise Exception("Couldn't connect to instance")
+
     def init_instance(self, with_instance) -> None:
         logging.info("Initializating instance...")
         if with_instance:

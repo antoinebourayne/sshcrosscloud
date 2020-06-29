@@ -144,14 +144,19 @@ class ProviderSpecific(ABC):
         print("------------------------------------------------------")
 
     def stop_instance_no_arg(self) -> None:
+        """
+        Stops a stopped instance
+        :param ssh:
+        :return:
+        """
         nodes = self.driver.list_nodes()
         if not nodes:
             logging.info("No instance running")
 
         for node in nodes:
             if node.id == self.ssh_params.sshcrosscloud_instance_id and node.state != "terminated":
-                terminate = self.driver.ex_stop_node(node)
-                if terminate:
+                stop = self.driver.ex_stop_node(node)
+                if stop:
                     logging.info("Stopped : " + node.id)
                     return
                 else:
@@ -187,13 +192,25 @@ class ProviderSpecific(ABC):
         nodes = self.driver.list_nodes()
         for node in nodes:
             if node.id == self.ssh_params.sshcrosscloud_instance_id and node.state != "terminated":
-                stop = self.driver.destroy_node(node)
-                if stop:
-                    logging.info("Terminated : " + node.id)
+                terminate = self.driver.destroy_node(node)
+                if terminate:
+                    logging.warning("Terminated : " + node.id)
                     return
                 else:
                     raise Exception("An error has occurred while terminating instance")
         return
+
+    def get_node_any_arg(self, *args):
+        nodes = self.driver.list_nodes(*args)
+        if not nodes:
+            raise Exception("No instance found")
+        if self.ssh_params.sshcrosscloud_instance_id:
+            for node in nodes:
+                if node.id == self.ssh_params.sshcrosscloud_instance_id:
+                    return node
+            raise Exception("No instance found")
+        else:
+            raise Exception("No instance ID registered")
 
 
 class SpecificAWS(ProviderSpecific):
@@ -249,16 +266,7 @@ class SpecificAWS(ProviderSpecific):
         return node
 
     def get_node(self):
-        nodes = self.driver.list_nodes()
-        if not nodes:
-            raise Exception("No instance found")
-        if self.ssh_params.sshcrosscloud_instance_id:
-            for node in nodes:
-                if node.id == self.ssh_params.sshcrosscloud_instance_id:
-                    return node
-            raise Exception("No instance found")
-        else:
-            raise Exception("No instance ID registered")
+        return self.get_node_any_arg()
 
     def get_region_from_config_file(self):
         if os.path.isfile(self.ssh_params.aws.config_path):
@@ -388,7 +396,6 @@ class SpecificAzure(ProviderSpecific):
 
         self.driver = provider_driver
         nodes = self.driver.list_nodes(self.ssh_params.azure.resource_group)
-        print(nodes)
 
         return nodes
 
@@ -424,16 +431,7 @@ class SpecificAzure(ProviderSpecific):
         return node
 
     def get_node(self):
-        nodes = self.driver.list_nodes(self.ssh_params.azure.resource_group)
-        if not nodes:
-            raise Exception("No instance found")
-        if self.ssh_params.sshcrosscloud_instance_id:
-            for node in nodes:
-                if node.id == self.ssh_params.sshcrosscloud_instance_id:
-                    return node
-            raise Exception("No instance found")
-        else:
-            raise Exception("No instance ID registered")
+        return self.get_node_any_arg(self.ssh_params.azure.resource_group)
 
     def get_credentials(self):
         if os.path.isfile(self.ssh_params.credentials_file_path):
@@ -488,7 +486,7 @@ class SpecificAzure(ProviderSpecific):
             if node.id == self.ssh_params.sshcrosscloud_instance_id and node.state != "terminated":
                 stop = self.driver.destroy_node(node=node, ex_destroy_vhd=True, ex_destroy_nic=False)
                 volumes = self.driver.list_volumes(ex_resource_group=self.ssh_params.azure.resource_group)
-                volume = [v for v in volumes if "sshcrosscloud" in v.name][0]
+                volume = [v for v in volumes if self.ssh_params.general_name in v.name][0]
                 self.driver.destroy_volume(volume)
                 if stop:
                     logging.warning("Terminated : " + node.id)
@@ -649,16 +647,7 @@ class SpecificGPC(ProviderSpecific):
         return node
 
     def get_node(self):
-        nodes = self.driver.list_nodes()
-        if not nodes:
-            raise Exception("No instance found")
-        if self.ssh_params.sshcrosscloud_instance_id:
-            for node in nodes:
-                if node.id == self.ssh_params.sshcrosscloud_instance_id:
-                    return node
-            raise Exception("No instance found")
-        else:
-            raise Exception("No instance ID registered")
+        return self.get_node_any_arg()
 
     def get_credentials(self):
         if os.path.isfile(self.ssh_params.credentials_file_path):

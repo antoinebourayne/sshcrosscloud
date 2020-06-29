@@ -12,19 +12,40 @@ class TestSSHCrossCloud(TestCase):
     command_arg = utils.default_args
 
     # AWS
+    @unittest.mock.patch('time.sleep')
     @unittest.mock.patch('os.system')
-    def test_wait_until_initialization(self, os_system):
+    def test_wait_until_initialization(self, os_system, sleep):
+        os_system.side_effect = [65280, 65280, 0]
         ssh = SSHCrossCloud(**self.command_arg)
         ssh.ssh_params.ssh_fonctionnal_params = "a"
         ssh.ssh_params.pem_ssh = "b"
         ssh.ssh_params.instance_user = "c"
         ssh.ssh_params.public_ip = "d"
         ssh.ssh_params.verbose = True
-        ssh.wait_until_initialization()
+        assert ssh.wait_until_initialization() == 0
         os_system.assert_called_with("ssh a -v b c@d exit && echo $?")
-        ssh.ssh_params.verbose = False
-        ssh.wait_until_initialization()
-        os_system.assert_called_with("ssh a b c@d exit && echo $?")
+        assert os_system.call_count == 3
+
+        os_system.side_effect = [65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280, 65280]
+        ssh = SSHCrossCloud(**self.command_arg)
+        ssh.ssh_params.ssh_fonctionnal_params = "a"
+        ssh.ssh_params.pem_ssh = "b"
+        ssh.ssh_params.instance_user = "c"
+        ssh.ssh_params.public_ip = "d"
+        ssh.ssh_params.verbose = True
+        with self.assertRaises(Exception):
+            ssh.wait_until_initialization()
+        os_system.assert_called_with("ssh a -v b c@d exit && echo $?")
+
+        os_system.side_effect = [1]
+        ssh = SSHCrossCloud(**self.command_arg)
+        ssh.ssh_params.ssh_fonctionnal_params = "a"
+        ssh.ssh_params.pem_ssh = "b"
+        ssh.ssh_params.instance_user = "c"
+        ssh.ssh_params.public_ip = "d"
+        ssh.ssh_params.verbose = True
+        assert ssh.wait_until_initialization() == 1
+        os_system.assert_called_with("ssh a -v b c@d exit && echo $?")
 
     @unittest.mock.patch.object(sshcrosscloud.ssh_cross_cloud.libcloud_extended.SpecificAWS, 'get_node')
     @unittest.mock.patch.object(sshcrosscloud.ssh_cross_cloud.libcloud_extended.SpecificAWS, 'spe_wait_until_running')
@@ -53,6 +74,10 @@ class TestSSHCrossCloud(TestCase):
         ssh.manage_instance()
         spe_start_instance.assert_called()
         ssh_init_instance.assert_called_with(with_instance=True)
+
+        ssh.ssh_params.instance_state = "unknown"
+        with self.assertRaises(Exception):
+            ssh.manage_instance()
 
     @unittest.mock.patch('os.system')
     def test_attach_to_instance(self, os_system):
