@@ -58,10 +58,14 @@ class TestSSHVar(TestCase):
                     'R': None,
                     'i': None}
 
+    @unittest.mock.patch.dict('os.environ', {'FOO': 'bar'})
     @unittest.mock.patch('dotenv.dotenv_values')
     @unittest.mock.patch('dotenv.find_dotenv')
     def test_update_custom_values(self, find_dotenv, dotenv_values):
-        # FIXME: mock dotenv doesnt work
+        # FIXME: patch for find_dotenv and dotenv_values doesn't work
         ssh_params = SSHParams(**self.default_args)
-        ssh_params.update_custom_values(replace_dotenv=True, replace_environ=False)
-        #dotenv_values.assert_called()
+        ssh_params.foo = None
+        ssh_params.update_custom_values(replace_dotenv=False, replace_environ=True)
+        assert ssh_params.foo == 'bar'
+
+

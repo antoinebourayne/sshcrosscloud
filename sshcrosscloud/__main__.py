@@ -52,6 +52,7 @@ def main():
 
     ssh = SSHCrossCloud(**command_args)
     ssh.execute()
+    # ssh.execute('ls')
 
     return 0
 

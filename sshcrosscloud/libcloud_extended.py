@@ -122,7 +122,7 @@ class ProviderSpecific(ABC):
         if os.path.isfile(self.ssh_params.rsa_private_key_file_path):
             if os.path.isfile(self.ssh_params.rsa_private_key_file_path + ".pub"):
                 logging.info("Using key pair : " + self.ssh_params.rsa_private_key_file_path + ".pub")
-                return
+                return 0
             else:
                 logging.info("Creating public key from private key in " + self.ssh_params.rsa_private_key_file_path)
                 return_code = os.system(pub_from_priv)
@@ -138,10 +138,8 @@ class ProviderSpecific(ABC):
         nodes = self.driver.list_nodes()
         if not nodes:
             print("No instance running")
-        print("------------------------------------------------------")
         for node in nodes:
             print(node)
-        print("------------------------------------------------------")
 
     def stop_instance_no_arg(self) -> None:
         """
@@ -247,6 +245,7 @@ class SpecificAWS(ProviderSpecific):
         return nodes
 
     def create_instance(self):
+        logging.info("Creating instance")
 
         self._init_rsa_key_pair()
         self._init_size()
@@ -400,6 +399,8 @@ class SpecificAzure(ProviderSpecific):
         return nodes
 
     def create_instance(self):
+        logging.info("Creating instance")
+
         self._init_rsa_key_pair()
         self._init_location()
         self._init_size()
@@ -499,10 +500,8 @@ class SpecificAzure(ProviderSpecific):
         nodes = self.driver.list_nodes(self.ssh_params.azure.resource_group)
         if not nodes:
             print("No instance running")
-        print("------------------------------------------------------")
         for node in nodes:
             print(node)
-        print("------------------------------------------------------")
 
     def spe_wait_until_running(self, nodes):
         list_node_args = {'ex_resource_group': 'NetworkWatcherRG'}
@@ -631,6 +630,8 @@ class SpecificGPC(ProviderSpecific):
         return nodes
 
     def create_instance(self):
+        logging.info("Creating instance")
+
         self._init_rsa_key_pair()
         self._init_image()
         self._init_size()

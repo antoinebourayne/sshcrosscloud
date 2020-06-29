@@ -140,7 +140,7 @@ class SSHParams:
         self.username = None
         self.ssh_params = ""
         self.pem_ssh = None
-        self.display_nodes = True
+        self.display_nodes = False
         self.provider_dict = None
         self.ssh_detach = False
         self.ssh_attach = False

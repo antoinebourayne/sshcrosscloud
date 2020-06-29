@@ -49,9 +49,6 @@ class SSHCrossCloud:
         if not self.ssh_params.pem_ssh:
             self.ssh_params.pem_ssh = "-i " + self.ssh_params.rsa_private_key_file_path
 
-        if self.ssh_params.verbose:
-            self.ssh_params.final_state = "leave"
-
         self.ssh_params.user_data = get_string_from_file(self.ssh_params.user_data_file_path)
 
     def init_provider_specifics(self):
@@ -316,6 +313,7 @@ class SSHCrossCloud:
             self.ssh_params.no_rsync_begin = True
             self.ssh_params.no_rsync_end = True
             self.ssh_params.no_attach = True
+            self.ssh_params.no_wait_until_init = True
             self.ssh_params.final_state = "terminate"
 
     def execute(self, sshscript=None):
