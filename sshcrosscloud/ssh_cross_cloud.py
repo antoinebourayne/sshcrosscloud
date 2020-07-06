@@ -31,8 +31,7 @@ class SSHCrossCloud:
 
     def _init_variables(self, ):
         """
-        A la fin de la fonction, env possède le maximum de variables d'environement
-        calculés, pour ne plus avoir à gérer les erreurs ou les valeurs par défaut.
+        Here init variables that cannot be initialized in the SSHParams
         """
         # Specific to entreprise polygrams
         if not self.ssh_params.polygram:
@@ -63,8 +62,9 @@ class SSHCrossCloud:
     def wait_until_initialization(self) -> int:
         """
         Tries to SSH the instance multiple times until it is initialized
-        :param :
+
         :return: 0 if ok, else error code
+        :rtype: ``bool``
         """
         logging.info("Waiting for instance initialization...")
         i = 0
@@ -97,6 +97,16 @@ class SSHCrossCloud:
         raise Exception("Couldn't connect to instance")
 
     def init_instance(self, with_instance) -> None:
+        """
+                With instance : get the running instance's id and ip
+                Without instance : create an instance and get id and ip
+
+                :param with_instance: Flag with or without instance
+                :type with_instance: ``bool``
+
+                :return:
+                :rtype: ``None``
+                """
         logging.info("Initializating instance...")
         if with_instance:
             node = self.spe_driver.get_node()
@@ -115,6 +125,12 @@ class SSHCrossCloud:
         return
 
     def manage_instance(self) -> None:
+        """
+        Manage with instance state
+
+        :return:
+        :rtype: ``None``
+        """
         if not self.ssh_params.sshcrosscloud_instance_id:
             self.init_instance(with_instance=False)
 
@@ -129,9 +145,10 @@ class SSHCrossCloud:
 
     def attach_to_instance(self) -> int:
         """
-        Open SSH terminal to instance and launch multiplex session if needed
-        :param : self
-        :return: 0 if ok, else error code
+        Attach to running instance, with parameters multiplex, attach or detach
+
+        :return: 0 if succeed, error code from bash command
+        :rtype: ``int``
         """
         ssh_params = ""
         if self.ssh_params.ssh_params:
@@ -179,9 +196,10 @@ class SSHCrossCloud:
 
     def finish_action(self) -> None:
         """
-        Terminates, destroys or leaves instances depending on the FINAL_STATE
-        :param : self
-        :return: None
+        Terminates, destroys or leaves instances depending on the final state
+
+        :return:
+        :rtype: ``None``
         """
         if self.ssh_params.final_state == "leave":
             logging.warning("Your instance is still alive")
@@ -206,9 +224,10 @@ class SSHCrossCloud:
 
     def rsync_to_instance(self) -> int:
         """
-        Using rsync in command line to sync local directory to instance
-        :param : self
-        :return: 0 if ok, else error code
+        Using rsync from local directory to instance
+
+        :return: 0 if succeed, error code from bash command
+        :rtype: ``int``
         """
         logging.info("Synchronizing local directory to instance")
         if self.ssh_params.verbose:
@@ -225,9 +244,10 @@ class SSHCrossCloud:
 
     def rsync_back_to_local(self) -> int:
         """
-        Rsync back
-        :param : self
-        :return: 0 if ok, else error code
+        Using rsync from instance to local directory
+
+        :return: 0 if succeed, error code from bash command
+        :rtype: ``int``
         """
         logging.info("Synchronizing directory back to local")
         if self.ssh_params.verbose:
@@ -246,7 +266,9 @@ class SSHCrossCloud:
     def check_parameters(self):
         """
         Check that the parameters have only one action and one final state
+
         :return:
+        :rtype: ``None``
         """
         if not self.ssh_params.provider:
             raise Exception("You must chose a provider (aws, azure or gcp)")
@@ -258,6 +280,12 @@ class SSHCrossCloud:
             raise Exception("Can't have multiple actions")
 
     def manage_commands(self):
+        """
+        Initialize the variables that will be used in the execute method
+
+        :return:
+        :rtype: ``None``
+        """
         if self.ssh_params.leave:
             self.ssh_params.final_state = "leave"
 
@@ -317,6 +345,19 @@ class SSHCrossCloud:
             self.ssh_params.final_state = "terminate"
 
     def execute(self, sshscript=None):
+        """
+        The main method of this class.
+
+        Once the parameters are acquired, this method synchronizes local directory to
+        the instance. If an 'sshscript' value is provided, it executes the bash command
+        on the instance, otherwise the ssh terminal of the instance is available.
+        Once the ssh connection is closed (process finished or terminal exited), the
+        instance directory is synchronized back to the instance. The instance then finishes
+        with the 'final_state' value.
+
+        :return:
+        :rtype: ``None``
+        """
         if sshscript:
             self.ssh_params.sshscript = sshscript
 

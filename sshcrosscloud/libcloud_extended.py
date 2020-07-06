@@ -3,9 +3,7 @@ import getpass
 import logging
 import os
 import stat
-import sys
 from abc import ABC, abstractmethod
-from pathlib import Path
 from libcloud.compute.providers import get_driver
 from libcloud.compute.types import Provider
 import sshcrosscloud.utils as utils
@@ -15,105 +13,122 @@ from sshcrosscloud.utils import get_public_key
 """
 ProviderSpecific Class
 
-This class is an upgrade of libcloud to simplify the use of SSH CROSS CLOUD
+This class is an upgrade of Libcloud to simplify the use of SSH CROSS CLOUD
 """
 
 
-# TODO: show parameters function
-
 class ProviderSpecific(ABC):
+    """
+    A base ProviderSpecific class to derive from
+
+    Specific methods are to be implemented. Contains methods useful to each provider.
+    """
     ssh_params = None
     driver = None
 
     @abstractmethod
     def init_specific_credentials(self):
         """
-
-        :return:
+        Initialize specific values:
+        - credentials_items
+        - credentials_file_path
+        - credentials_name
+        ...
         """
         pass
 
     @abstractmethod
     def init_specific(self):
         """
-
-        :return:
+        Initialize advanced specific attributes:
+        - instance_user
+        - region
+        - credentials
+        - Libcloud driver
+        - Existing instances (nodes)
         """
         pass
 
     @abstractmethod
     def create_instance(self):
         """
-
-        :return:
+        Initialize instance parameters (size, image etc.) and create an instance.
         """
         pass
 
     @abstractmethod
     def get_node(self):
         """
+        If there is an instance with the same name as the user, returns it,
+        else, raises an Exception.
+        Most providers can just call get_node_any_arg().
 
-        :return:
+        :return: Returns the instance (node) with the username
+        :rtype: :class:`.Node`
         """
         pass
 
     @abstractmethod
     def display_instances(self):
         """
-
-        :return:
+        Diplays the instances that are running on the specified provider
         """
         pass
 
     @abstractmethod
     def _init_rsa_key_pair(self):
         """
-
-        :return:
+        Manage the RSA key pair creation
         """
         pass
 
     @abstractmethod
     def spe_wait_until_running(self, nodes):
         """
-
-        :return:
+        Call wait_until_running with specific parameters
         """
         pass
 
     @abstractmethod
     def start_instance(self):
         """
-
-        :return:
+        Restarts the stopped instance
         """
         pass
 
     @abstractmethod
     def stop_instance(self):
         """
-
-        :return:
+        Stops the instance
         """
         pass
 
     @abstractmethod
     def terminate_instance(self):
         """
-
-        :return:
+        Stops the instance
         """
         pass
 
     @abstractmethod
     def get_credentials(self):
         """
+        Get credentials from a file
 
-        :return:
+        :return: Several Strings for each credential
+        :rtype: :``str``
         """
         pass
 
     def create_local_rsa_key_pair(self):
+        """
+        If both private and public RSA keys are stored does nothing
+        If no key stored, create a public and a private RSA key
+        If only private key, generates a public RSA key from it
+
+        :return: Return code of the bash command (0 if success)
+        :rtype: :``int``
+        """
         generate_key_pair = "ssh-keygen -b 2048 -f " + self.ssh_params.rsa_private_key_file_path
 
         pub_from_priv = "ssh-keygen -b 2048 -y -f " + self.ssh_params.rsa_private_key_file_path \
@@ -135,6 +150,9 @@ class ProviderSpecific(ABC):
             return return_code
 
     def display_instances_no_arg(self):
+        """
+        Display instances
+        """
         nodes = self.driver.list_nodes()
         if not nodes:
             print("No instance running")
@@ -143,9 +161,9 @@ class ProviderSpecific(ABC):
 
     def stop_instance_no_arg(self) -> None:
         """
-        Stops a stopped instance
-        :param ssh:
-        :return:
+        Stops a running instance
+
+        :return: None
         """
         nodes = self.driver.list_nodes()
         if not nodes:
@@ -164,8 +182,8 @@ class ProviderSpecific(ABC):
     def start_instance_no_arg(self) -> None:
         """
         Starts a stopped instance
-        :param ssh:
-        :return:
+
+        :return: None
         """
         nodes = self.driver.list_nodes()
         if not nodes:
@@ -183,9 +201,9 @@ class ProviderSpecific(ABC):
 
     def terminate_instance_no_arg(self) -> None:
         """
-        Terminates all owner's instances
-        :param ssh:
-        :return:
+        Terminate the running instance
+
+        :return: None
         """
         nodes = self.driver.list_nodes()
         for node in nodes:
@@ -199,6 +217,13 @@ class ProviderSpecific(ABC):
         return
 
     def get_node_any_arg(self, *args):
+        """
+        If there is an instance with the same name as the user, returns it,
+        else, raises an Exception.
+
+        :return: Returns the instance (node) with the username
+        :rtype: :class:`.Node`
+        """
         nodes = self.driver.list_nodes(*args)
         if not nodes:
             raise Exception("No instance found")

@@ -107,7 +107,7 @@ class TestProviderSpecific(TestCase):
         ssh = SSHCrossCloud(**self.command_arg)
         isfile.return_value = True
         ssh.ssh_params.rsa_private_key_file_path = "a"
-        assert ssh.spe_driver.create_local_rsa_key_pair() is None
+        assert ssh.spe_driver.create_local_rsa_key_pair() == 0
 
     def test_stop_instance_no_arg(self):
         ssh = SSHCrossCloud(**self.command_arg)

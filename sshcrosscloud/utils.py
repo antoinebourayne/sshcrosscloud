@@ -221,6 +221,12 @@ class SSHParams:
         """
         This method creates a dict with dotenv values updated by the environment values,
         then store them in the ssh_var object
+
+        :param replace_dotenv: Flag to get dotenv values
+        :type replace_dotenv: ``bool``
+
+        :return: Flag to get environnment values
+        :rtype: ``bool``
         """
         # Default
         env = {}
@@ -247,6 +253,15 @@ class SSHParams:
 
 
 def get_string_from_file(filepath):
+    """
+    Return the raw string from a string file path
+
+    :param filepath: Key Path
+    :type filepath: ``str``
+
+    :return: File raw content
+    :rtype: ``str``
+    """
     try:
         if os.path.isfile(filepath):
             with open(filepath, 'r') as userdatafile:
@@ -257,6 +272,15 @@ def get_string_from_file(filepath):
 
 
 def get_public_key(private_key_path: str) -> str:
+    """
+    Return the RSA public key from a string key path
+
+    :param private_key_path: Private key path
+    :type private_key_path: ``str``
+
+    :return: RSA public key
+    :rtype: :``str``
+    """
     if os.path.isfile(private_key_path + ".pub"):
         with open(private_key_path + ".pub", 'r') as file:
             rsa_pub = file.read()
@@ -266,6 +290,15 @@ def get_public_key(private_key_path: str) -> str:
 
 
 def get_ui_confirmation(message: str):
+    """
+    Get user confirmation to a message
+
+    :param message: Message displayed to the user
+    :type message: ``str``
+
+    :return: User answer: (True: yes False: no)
+    :rtype: :``bool``
+    """
     print(message + " y/n")
     while 1:
         answer = input()
@@ -275,7 +308,3 @@ def get_ui_confirmation(message: str):
             return False
         else:
             print("Must provide 'y' or 'n' answer")
-
-
-def this_is_an_exception():
-    raise Exception("oops")

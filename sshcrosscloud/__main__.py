@@ -1,12 +1,9 @@
 import logging
-import os
-import sys
 
 import coloredlogs
 
 from sshcrosscloud.ssh_cross_cloud import SSHCrossCloud
 from argparse import ArgumentParser
-import sshcrosscloud.utils as utils
 
 """
 
