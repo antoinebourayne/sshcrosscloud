@@ -742,8 +742,11 @@ def get_provider_specific_driver(ssh_vars: utils.SSHParams):
     if ssh_vars.provider == 'aws':
         return SpecificAWS(ssh_vars)
 
-    if ssh_vars.provider == 'azure':
+    elif ssh_vars.provider == 'azure':
         return SpecificAzure(ssh_vars)
 
-    if ssh_vars.provider == 'gcp':
+    elif ssh_vars.provider == 'gcp':
         return SpecificGPC(ssh_vars)
+
+    else:
+        raise Exception("Provider not supported")
